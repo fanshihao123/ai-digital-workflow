@@ -40,7 +40,7 @@ git diff --name-only HEAD~{n}..HEAD > /tmp/changed-files.txt
 git diff HEAD~{n}..HEAD > /tmp/changes.diff
 
 # OpenCLI 调度 Codex 第一轮审查
-opencli codex exec --full-auto "
+codex exec --full-auto "
   审查以下代码变更。
   
   Diff:
@@ -83,7 +83,7 @@ Round 1 发现 CRITICAL 或 ERROR 时，生成修复任务：
 git diff HEAD~1..HEAD > /tmp/fix-diff.diff
 
 # OpenCLI 调度 Codex 第二轮审查
-opencli codex exec --full-auto "
+codex exec --full-auto "
   这是第二轮审查。上一轮发现了以下问题并已修复：
   {Round 1 的 CRITICAL/ERROR 列表}
 

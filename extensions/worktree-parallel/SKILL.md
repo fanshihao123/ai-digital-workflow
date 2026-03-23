@@ -28,7 +28,7 @@ design.md complexity: high
   并行启动:
     claude --worktree {名称}-auth  "Task 1" &
     claude --worktree {名称}-api   "Task 2" &
-    opencli codex exec "实时审查"   &  (只读 worktree)
+    codex exec "实时审查"   &  (只读 worktree)
        |
   wait → 按 merge_order 顺序 no-ff 合并
        |
@@ -48,5 +48,5 @@ design.md complexity: high
 | 角色 | 工具 | 权限 |
 |------|------|------|
 | 开发 Agent | claude --worktree --model sonnet | 只改 file_scope 内的文件 |
-| 审查 Agent | opencli codex exec | 只读，不修改任何文件 |
+| 审查 Agent | codex exec | 只读，不修改任何文件 |
 | 冲突解决 Agent | claude --worktree --model sonnet | 只处理冲突标记 |

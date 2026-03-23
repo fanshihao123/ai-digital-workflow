@@ -209,7 +209,7 @@ Claude 按照上面的模板，一次性生成三个文件的 v1 版本。
 通过 OpenCLI 调度 Codex 审查 spec 质量：
 
 ```bash
-opencli codex exec --full-auto "
+codex exec --full-auto "
 你是一个资深技术架构师，负责审查以下 spec 文档的质量。
 
 requirements.md:

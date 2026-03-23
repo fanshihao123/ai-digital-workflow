@@ -30,7 +30,7 @@ MSG_TEXT=$(echo "$MESSAGE" | jq -r '.content.text // .content // empty' 2>/dev/n
 # 模型选择（复用外部脚本）
 select_model() {
   local complexity="${1:-low}"
-  source "$SCRIPT_DIR/select-model.sh" "$complexity"
+  source "$SCRIPT_DIR/select-model.sh" "$complexity" >&2
   echo "$CLAUDE_MODEL"
 }
 
@@ -45,27 +45,28 @@ notify() {
   bash "$SCRIPT_DIR/feishu-notify.sh" "$message" 2>/dev/null || true
 }
 
-# 从 design.md 提取复杂度
+# 从 design.md 提取复杂度（macOS 兼容）
 get_complexity() {
   local feature_name="$1"
   local design_file="$PROJECT_ROOT/specs/$feature_name/design.md"
   if [ -f "$design_file" ]; then
-    grep -oP '复杂度：\s*\K\w+' "$design_file" 2>/dev/null \
-      || grep -oP 'complexity:\s*\K\w+' "$design_file" 2>/dev/null \
-      || echo "low"
+    local val
+    val=$(sed -n 's/.*复杂度：[[:space:]]*\([a-zA-Z]*\).*/\1/p' "$design_file" 2>/dev/null | head -1)
+    [ -z "$val" ] && val=$(sed -n 's/.*complexity:[[:space:]]*\([a-zA-Z]*\).*/\1/p' "$design_file" 2>/dev/null | head -1)
+    echo "${val:-low}"
   else
     echo "low"
   fi
 }
 
-# 从 requirements.md 提取 Jira issue key
+# 从 requirements.md 提取 Jira issue key（macOS 兼容）
 get_jira_key() {
   local feature_name="$1"
   local req_file="$PROJECT_ROOT/specs/$feature_name/requirements.md"
   if [ -f "$req_file" ]; then
-    grep -oP 'Jira：\s*\K[A-Z]+-\d+' "$req_file" 2>/dev/null \
-      || grep -oP 'Jira:\s*\K[A-Z]+-\d+' "$req_file" 2>/dev/null \
-      || echo ""
+    local val
+    val=$(sed -n 's/.*Jira[：:][[:space:]]*\([A-Z][A-Z]*-[0-9][0-9]*\).*/\1/p' "$req_file" 2>/dev/null | head -1)
+    echo "$val"
   else
     echo ""
   fi
@@ -169,11 +170,11 @@ step1_spec_writer() {
   local is_hotfix="${2:-false}"
   local model
 
-  echo "=== Step 1: spec-writer ==="
+  echo "=== Step 1: spec-writer ===" >&2
   notify "📝 开始需求分析: $input"
 
   # Stage 1: Claude 生成初稿
-  echo "  [Stage 1] Claude 生成初稿..."
+  echo "  [Stage 1] Claude 生成初稿..." >&2
   model=$(select_model "low")
   claude --model "$model" -p "
     Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
@@ -184,18 +185,18 @@ step1_spec_writer() {
     $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
     Execute spec-writer Stage 1: generate requirements.md + design.md + tasks.md for: $input
     $([ "$is_hotfix" = "true" ] && echo "This is a /hotfix — skip design, generate tasks.md directly with minimal requirements.md")
-  "
+  " >&2
 
   local feature_name
   feature_name=$(detect_feature_name)
   if [ -z "$feature_name" ]; then
-    echo "  ❌ spec-writer 未生成 specs 目录"
+    echo "  ❌ spec-writer 未生成 specs 目录" >&2
     notify "❌ spec-writer 失败: 未生成 specs 目录"
     return 1
   fi
 
   # Jira 同步
-  jira_sync "requirements-done" "$feature_name"
+  jira_sync "requirements-done" "$feature_name" >&2
 
   # 跳过审查的条件：hotfix 或 (complexity:low 且 任务数 ≤ 2)
   local complexity
@@ -204,21 +205,21 @@ step1_spec_writer() {
   task_count=$(grep -c "^### Task" "$PROJECT_ROOT/specs/$feature_name/tasks.md" 2>/dev/null || echo 0)
 
   if [ "$is_hotfix" = "true" ]; then
-    echo "  [Stage 2+3] 跳过（hotfix 模式）"
+    echo "  [Stage 2+3] 跳过（hotfix 模式）" >&2
     echo "$feature_name"
     return 0
   fi
 
   if [ "$complexity" = "low" ] && [ "$task_count" -le 2 ]; then
-    echo "  [Stage 2+3] 跳过（complexity:low 且任务数 ≤ 2）"
+    echo "  [Stage 2+3] 跳过（complexity:low 且任务数 ≤ 2）" >&2
     echo "$feature_name"
     return 0
   fi
 
   # Stage 2: OpenAI Codex 审查
-  echo "  [Stage 2] OpenAI Codex 审查..."
-  if command -v opencli &> /dev/null; then
-    opencli codex exec --full-auto "
+  echo "  [Stage 2] OpenAI Codex 审查..." >&2
+  if command -v codex &> /dev/null; then
+    codex exec --full-auto "
       你是一个资深技术架构师，负责审查以下 spec 文档的质量。
 
       requirements.md:
@@ -237,14 +238,14 @@ step1_spec_writer() {
       输出格式: DIMENSION: Rx  VERDICT: PASS|ISSUE  DETAIL: ...  SUGGESTION: ...
       最后输出: OVERALL: PASS|NEEDS_REVISION  CRITICAL_ISSUES: {数量}
     " > "$PROJECT_ROOT/specs/$feature_name/spec-review.md" 2>/dev/null || {
-      echo "  ⚠️ Codex 审查失败，跳过 Stage 2"
+      echo "  ⚠️ Codex 审查失败，跳过 Stage 2" >&2
     }
   else
-    echo "  ⚠️ opencli 未安装，跳过 Stage 2"
+    echo "  ⚠️ codex 未安装，跳过 Stage 2" >&2
   fi
 
   # Stage 3: Claude 复审 + 定稿
-  echo "  [Stage 3] Claude 复审 + 定稿..."
+  echo "  [Stage 3] Claude 复审 + 定稿..." >&2
   if [ -f "$PROJECT_ROOT/specs/$feature_name/spec-review.md" ]; then
     model=$(select_model "$complexity")
     claude --model "$model" -p "
@@ -260,15 +261,16 @@ step1_spec_writer() {
       - 更新三个文件头部状态为 reviewed
 
       如果 CRITICAL_ISSUES >= 3 且无法全部解决，输出 NEEDS_HUMAN_REVIEW。
-    "
+    " >&2
 
     # 审查失败兜底
     local critical_count
-    critical_count=$(grep -oP 'CRITICAL_ISSUES:\s*\K\d+' \
-      "$PROJECT_ROOT/specs/$feature_name/spec-review.md" 2>/dev/null || echo 0)
+    critical_count=$(sed -n 's/.*CRITICAL_ISSUES:[[:space:]]*\([0-9]*\).*/\1/p' \
+      "$PROJECT_ROOT/specs/$feature_name/spec-review.md" 2>/dev/null | tail -1)
+    critical_count="${critical_count:-0}"
     if [ "$critical_count" -ge 3 ]; then
       notify "⚠️ Spec 审查发现 $critical_count 个严重问题，需人工介入: $feature_name"
-      echo "  ⚠️ $critical_count 个 CRITICAL_ISSUES，已通知人工介入"
+      echo "  ⚠️ $critical_count 个 CRITICAL_ISSUES，已通知人工介入" >&2
     fi
   fi
 
@@ -381,7 +383,7 @@ step3_review() {
   # Round 1: OpenCLI Codex 审查
   echo "  [Round 1] Codex 审查..."
   local review_result="PASS"
-  if command -v opencli &> /dev/null; then
+  if command -v codex &> /dev/null; then
     claude --model "$model" -p "
       Read $PROJECT_ROOT/.claude/skills/code-reviewer/SKILL.md
       Read $PROJECT_ROOT/.claude/SECURITY.md
@@ -389,14 +391,14 @@ step3_review() {
 
       Execute code-reviewer Round 1:
       - Get the diff of recent changes for feature '$feature_name'
-      - Use opencli codex exec to review the changes
+      - Use codex exec to review the changes
       - Save review report to specs/$feature_name/review-report.md
       - If CRITICAL or ERROR found, generate fix instructions and apply fixes
       - Then run Round 2 to verify fixes
       - Save final verdict (PASS/FAIL) at end of review-report.md
     "
   else
-    echo "  ⚠️ opencli 未安装，使用 Claude 单轮审查..."
+    echo "  ⚠️ codex 未安装，使用 Claude 单轮审查..."
     claude --model "$model" -p "
       Read $PROJECT_ROOT/.claude/skills/code-reviewer/SKILL.md
       Read $PROJECT_ROOT/.claude/SECURITY.md

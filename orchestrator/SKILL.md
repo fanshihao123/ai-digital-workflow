@@ -92,15 +92,15 @@ complexity 判定 → 选择模型
 
 ```bash
 # high complexity → 优先 Opus
-claude --model opus "执行任务..." 2>/dev/null
+claude --model opus -p "执行任务..." 2>/dev/null
 if [ $? -ne 0 ]; then
   # 额度不足或 Opus 不可用 → 降级 Sonnet
   echo "⚠️ Opus 4.6 不可用，降级使用 Sonnet"
-  claude --model sonnet "执行任务..."
+  claude --model sonnet -p "执行任务..."
 fi
 
 # low/medium → 直接 Sonnet
-claude --model sonnet "执行任务..."
+claude --model sonnet -p "执行任务..."
 ```
 
 # 公司 skills（有配置则加载）
@@ -135,7 +135,7 @@ C. 如配置了 COMPANY_SKILLS_GIT → git pull 公司 skills 仓库
             └─────────────┼─────────────┘
                           |
               Stage 2: OpenAI Codex / GPT-5.4 审查
-                          |  opencli codex exec → 13 维度审查
+                          |  codex exec → 13 维度审查
                           |  输出 spec-review.md
                           |
               Stage 3: Claude 复审 + 定稿
@@ -196,7 +196,7 @@ complexity: high 且 ENABLE_WORKTREE_PARALLEL=true?
 ```
 代码提交
     |
- Round 1: opencli codex exec --full-auto "审查"
+ Round 1: codex exec --full-auto "审查"
     |
  CRITICAL/ERROR?
    / \
@@ -204,7 +204,7 @@ complexity: high 且 ENABLE_WORKTREE_PARALLEL=true?
   |
  生成修复指令 → Claude Code 修复
   |
- Round 2: opencli codex exec --full-auto "验证修复"
+ Round 2: codex exec --full-auto "验证修复"
   |
  仍有问题？ → 报告给编排器
   |

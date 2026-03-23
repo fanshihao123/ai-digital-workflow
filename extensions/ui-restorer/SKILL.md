@@ -80,7 +80,7 @@ Antigravity 在独立 worktree 中工作（如 worktree-parallel 已启用）
 
 ```bash
 # 方式 1：OpenCLI CLI 化 Antigravity（推荐，编排器可自动调度）
-opencli electron antigravity "
+opencli antigravity "
   打开 Figma 设计稿: ${FIGMA_URL}
   根据设计稿生成以下文件:
   - ${FILE_PATH} (React/Vue 组件)
@@ -146,7 +146,7 @@ claude --model sonnet --print "
 ### 审查 B：OpenCLI Codex UI 一致性 + a11y 审查
 
 ```bash
-opencli codex exec --full-auto "
+codex exec --full-auto "
   审查以下 UI 代码的可访问性和设计一致性。
   
   Diff: $(git diff HEAD~1..HEAD)

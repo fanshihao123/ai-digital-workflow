@@ -91,7 +91,7 @@ for GROUP in $GROUPS; do
         echo "  🔍 调度审查代理: $AGENT_ID → $WORKTREE_DIR"
         (
           cd "$ABS_WORKTREE"
-          opencli codex exec --full-auto "
+          codex exec --full-auto "
             你是代码审查代理。监控以下分支的变更：
             $(jq -r '.agents[] | select(.role=="developer") | .branch' "$ASSIGNMENT_FILE" | tr '\n' ', ')
             
