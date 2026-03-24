@@ -6,12 +6,8 @@ model: sonnet
 
 # /review
 
-仅执行代码审查阶段。
+必须真实转发到编排器脚本：
 
-必须读取并遵循：
-- `.claude/CLAUDE.md`
-- `.claude/SECURITY.md`
-- `.claude/CODING_GUIDELINES.md`
-- `.claude/skills/code-reviewer/SKILL.md`
+!`bash .claude/orchestrator/scripts/feishu-handler.sh "/review"`
 
-输出两轮审查结果、发现的问题、修复状态和最终结论。
+执行后总结真实审查结果，并包含两轮审查信息。

@@ -7,16 +7,10 @@ model: sonnet
 
 # /hotfix
 
-用户请求：$ARGUMENTS
+如果 `$ARGUMENTS` 为空，提示用户补充修复描述并停止。
 
-按 `.claude/CLAUDE.md` 和 `.claude/orchestrator/SKILL.md` 的 hotfix 语义执行：跳过完整设计评审，以最短路径完成修复、验证、汇报。
+必须真实转发到编排器脚本，而不是手工模拟：
 
-必须读取：
-- `.claude/CLAUDE.md`
-- `.claude/SECURITY.md`
-- `.claude/CODING_GUIDELINES.md`
-- `.claude/orchestrator/SKILL.md`
-- `.claude/skills/code-reviewer/SKILL.md`
-- `.claude/skills/test-runner/SKILL.md`
+!`bash .claude/orchestrator/scripts/feishu-handler.sh "/hotfix $ARGUMENTS"`
 
-如果 `$ARGUMENTS` 为空，要求用户补充修复描述。
+执行后总结真实产物与结果，并给出阶段性信息。

@@ -6,15 +6,8 @@ model: sonnet
 
 # /test
 
-仅执行测试阶段。
+必须真实转发到编排器脚本：
 
-必须读取并遵循：
-- `.claude/CLAUDE.md`
-- `.claude/skills/test-runner/SKILL.md`
+!`bash .claude/orchestrator/scripts/feishu-handler.sh "/test"`
 
-输出：
-- 执行了哪些测试
-- 通过/失败统计
-- 覆盖率（如可得）
-- 关键失败项
-- 最终 PASS / FAIL
+执行后总结真实测试结果。

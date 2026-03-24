@@ -144,7 +144,7 @@ C. 如配置了 COMPANY_SKILLS_GIT → git pull 公司 skills 仓库
                   三个文件 status: reviewed → 进入 Step 2
 ```
 
-**跳过审查**：`/hotfix` 命令或 complexity:low 且任务数 ≤ 2 时跳过 Stage 2+3。
+**审查策略**：默认所有 `/start-workflow` 任务都必须执行 Stage 2（Codex spec 审查）+ Stage 3（Claude 复审定稿）；只有 `/hotfix` 模式允许跳过完整 spec 审查。
 
 **审查失败兜底**：3+ CRITICAL_ISSUES 未解决 → 飞书通知人工介入。
 
@@ -247,6 +247,18 @@ deploy-executor（如启用）→ 部署 + 健康检查 + 自动回滚
                 |
       (都未启用) → 直接跳到通知
 ```
+
+### 阶段通知要求（强制）
+
+每个阶段都必须有可见输出，不允许只在最后一次性汇报：
+- Step 0：已打开 VSCode / 已加载哪些规范文件
+- Step 1：spec 产物路径 + Codex 审查结果
+- Step 2：开发完成的任务、涉及文件
+- Step 3：两轮 code review 结果
+- Step 4：测试命令、通过/失败、覆盖率
+- Step 5：文档同步和归档结果
+- Step 6：部署/跳过原因
+- Step 7：最终摘要
 
 ### Step 7：通知
 

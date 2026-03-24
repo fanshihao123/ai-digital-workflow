@@ -198,26 +198,20 @@ step1_spec_writer() {
   # Jira 同步
   jira_sync "requirements-done" "$feature_name" >&2
 
-  # 跳过审查的条件：hotfix 或 (complexity:low 且 任务数 ≤ 2)
+  # 只有 hotfix 允许跳过完整 spec 审查；普通 workflow 一律执行 Codex 审查 + Claude 复审
   local complexity
   complexity=$(get_complexity "$feature_name")
-  local task_count
-  task_count=$(grep -c "^### Task" "$PROJECT_ROOT/specs/$feature_name/tasks.md" 2>/dev/null || echo 0)
 
   if [ "$is_hotfix" = "true" ]; then
     echo "  [Stage 2+3] 跳过（hotfix 模式）" >&2
-    echo "$feature_name"
-    return 0
-  fi
-
-  if [ "$complexity" = "low" ] && [ "$task_count" -le 2 ]; then
-    echo "  [Stage 2+3] 跳过（complexity:low 且任务数 ≤ 2）" >&2
+    notify "🟡 Step 1 完成（hotfix）: 已生成最小 spec，跳过 Codex 审查"
     echo "$feature_name"
     return 0
   fi
 
   # Stage 2: OpenAI Codex 审查
   echo "  [Stage 2] OpenAI Codex 审查..." >&2
+  notify "🟣 Step 1 / Stage 2: 开始 Codex spec 审查 ($feature_name)"
   if command -v codex &> /dev/null; then
     codex exec --full-auto "
       你是一个资深技术架构师，负责审查以下 spec 文档的质量。
@@ -241,7 +235,9 @@ step1_spec_writer() {
       echo "  ⚠️ Codex 审查失败，跳过 Stage 2" >&2
     }
   else
-    echo "  ⚠️ codex 未安装，跳过 Stage 2" >&2
+    echo "  ❌ codex 未安装，无法执行强制 spec 审查" >&2
+    notify "❌ Step 1 失败: codex 未安装，无法执行强制 spec 审查 ($feature_name)"
+    return 1
   fi
 
   # Stage 3: Claude 复审 + 定稿
@@ -274,6 +270,7 @@ step1_spec_writer() {
     fi
   fi
 
+  notify "✅ Step 1 完成: 已生成并复审 spec ($feature_name)"
   echo "$feature_name"
 }
 
@@ -286,7 +283,7 @@ step2_develop() {
   complexity=$(get_complexity "$feature_name")
 
   echo "=== Step 2: 开发执行 ==="
-  notify "💻 开始开发: $feature_name (complexity: $complexity)"
+  notify "💻 Step 2: 开始开发 $feature_name (complexity: $complexity)"
 
   # Jira 同步
   jira_sync "dev-start" "$feature_name"
@@ -382,6 +379,7 @@ step3_review() {
 
   # Round 1: OpenCLI Codex 审查
   echo "  [Round 1] Codex 审查..."
+  notify "🔍 Step 3: 开始两轮 code review ($feature_name)"
   local review_result="PASS"
   if command -v codex &> /dev/null; then
     claude --model "$model" -p "
@@ -416,6 +414,7 @@ step3_review() {
 
   # Jira 同步
   jira_sync "review-done" "$feature_name"
+  notify "✅ Step 3 完成: code review 结束 ($feature_name)"
 }
 
 # ============================================================
@@ -425,7 +424,7 @@ step4_test() {
   local feature_name="$1"
 
   echo "=== Step 4: test-runner ==="
-  notify "🧪 开始测试: $feature_name"
+  notify "🧪 Step 4: 开始测试 $feature_name"
 
   claude --model sonnet -p "
     Read $PROJECT_ROOT/.claude/skills/test-runner/SKILL.md
@@ -450,6 +449,7 @@ step4_test() {
   fi
 
   echo "  ✅ 测试通过"
+  notify "✅ Step 4 完成: 测试通过 ($feature_name)"
 }
 
 # ============================================================
@@ -459,7 +459,7 @@ step5_doc_sync() {
   local feature_name="$1"
 
   echo "=== Step 5: doc-syncer ==="
-  notify "📚 同步文档: $feature_name"
+  notify "📚 Step 5: 开始同步文档 $feature_name"
 
   claude --model sonnet -p "
     Read $PROJECT_ROOT/.claude/skills/doc-syncer/SKILL.md
@@ -473,6 +473,7 @@ step5_doc_sync() {
     3. Update specs/ITERATIONS.md
     4. Commit documentation changes
   "
+  notify "✅ Step 5 完成: 文档已同步 ($feature_name)"
 }
 
 # ============================================================
