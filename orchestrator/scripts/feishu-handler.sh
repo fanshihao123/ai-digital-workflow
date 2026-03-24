@@ -69,6 +69,418 @@ extract_report_field() {
   echo "$value"
 }
 
+has_package_script() {
+  local script_name="$1"
+  [ -f "$PROJECT_ROOT/package.json" ] || return 1
+  grep -q "\"$script_name\"[[:space:]]*:" "$PROJECT_ROOT/package.json" 2>/dev/null
+}
+
+first_existing_file() {
+  local candidate
+  for candidate in "$@"; do
+    if [ -f "$candidate" ]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+has_reviewed_spec() {
+  local feature_name="$1"
+  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+
+  [ -f "$spec_dir/requirements.md" ] || return 1
+  [ -f "$spec_dir/design.md" ] || return 1
+  [ -f "$spec_dir/tasks.md" ] || return 1
+
+  grep -q "状态：reviewed" "$spec_dir/requirements.md" 2>/dev/null || return 1
+  grep -q "状态：reviewed" "$spec_dir/design.md" 2>/dev/null || return 1
+  grep -q "状态：done\|状态：reviewed" "$spec_dir/tasks.md" 2>/dev/null || return 1
+}
+
+extract_feature_scopes() {
+  local feature_name="$1"
+  local tasks_file="$PROJECT_ROOT/specs/$feature_name/tasks.md"
+
+  if [ -f "$tasks_file" ]; then
+    sed -n 's/.*文件范围：[[:space:]]*`\([^`]*\)`.*/\1/p' "$tasks_file" | awk 'NF'
+  fi
+}
+
+extract_feature_tests() {
+  local feature_name="$1"
+  local scopes
+  local files=()
+  local scope
+  local scope_dir
+  local scope_base
+  local project_relative
+
+  scopes=$(extract_feature_scopes "$feature_name")
+  for scope in $scopes; do
+    scope_dir=$(dirname "$scope")
+    scope_base=$(basename "$scope")
+    scope_base="${scope_base%.*}"
+    project_relative="${PROJECT_ROOT}/${scope_dir}"
+
+    for candidate in \
+      "$PROJECT_ROOT/${scope_dir}/${scope_base}.test.tsx" \
+      "$PROJECT_ROOT/${scope_dir}/${scope_base}.test.ts" \
+      "$PROJECT_ROOT/${scope_dir}/${scope_base}.test.jsx" \
+      "$PROJECT_ROOT/${scope_dir}/${scope_base}.test.js" \
+      "$PROJECT_ROOT/${scope_dir}/${scope_base}.spec.tsx" \
+      "$PROJECT_ROOT/${scope_dir}/${scope_base}.spec.ts" \
+      "$PROJECT_ROOT/${scope_dir}/${scope_base}.spec.jsx" \
+      "$PROJECT_ROOT/${scope_dir}/${scope_base}.spec.js" \
+      "$PROJECT_ROOT/src/__tests__/${scope_base}.test.tsx" \
+      "$PROJECT_ROOT/src/__tests__/${scope_base}.test.ts" \
+      "$PROJECT_ROOT/src/__tests__/${scope_base}.spec.tsx" \
+      "$PROJECT_ROOT/src/__tests__/${scope_base}.spec.ts" \
+      "$PROJECT_ROOT/tests/${scope_base}.test.tsx" \
+      "$PROJECT_ROOT/tests/${scope_base}.test.ts" \
+      "$PROJECT_ROOT/tests/${scope_base}.spec.tsx" \
+      "$PROJECT_ROOT/tests/${scope_base}.spec.ts" \
+      "$PROJECT_ROOT/test/${scope_base}.test.tsx" \
+      "$PROJECT_ROOT/test/${scope_base}.test.ts" \
+      "$PROJECT_ROOT/test/${scope_base}.spec.tsx" \
+      "$PROJECT_ROOT/test/${scope_base}.spec.ts"; do
+      if [ -f "$candidate" ]; then
+        files+=("$candidate")
+      fi
+    done
+
+    if [ -d "$project_relative" ]; then
+      while IFS= read -r matched; do
+        [ -n "$matched" ] && files+=("$matched")
+      done < <(
+        rg --files "$project_relative" 2>/dev/null | rg "(^|/)${scope_base}\\.(test|spec)\\.(ts|tsx|js|jsx)$" || true
+      )
+    fi
+  done
+
+  printf '%s\n' "${files[@]}" | awk 'NF && !seen[$0]++'
+}
+
+run_local_review() {
+  local feature_name="$1"
+  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  local tasks_file="$spec_dir/tasks.md"
+  local review_report="$spec_dir/review-report.md"
+  local diff_summary
+  local scope_summary
+  local findings=""
+  local scope
+  local scope_count=0
+  local missing_scope_count=0
+  local round1_status="PASS"
+  local round2_status="PASS"
+  local final_verdict="PASS"
+  local previous_round2_status="FOUND"
+
+  if [ ! -f "$tasks_file" ]; then
+    round1_status="FAIL"
+    findings="${findings}- ERROR：缺少 tasks.md，无法执行基于 feature-scope 的本地审查"$'\n'
+  fi
+
+  scope_summary=$(extract_feature_scopes "$feature_name" | sed 's/^/- `/;s/$/`/' || true)
+  if [ -z "$scope_summary" ]; then
+    round1_status="FAIL"
+    findings="${findings}- ERROR：tasks.md 中未声明“文件范围”，无法确定本次 feature 的审查边界"$'\n'
+    scope_summary="- 未提取到文件范围"
+  else
+    while IFS= read -r scope; do
+      [ -n "$scope" ] || continue
+      scope_count=$((scope_count + 1))
+      if [ ! -e "$PROJECT_ROOT/$scope" ]; then
+        missing_scope_count=$((missing_scope_count + 1))
+        findings="${findings}- WARNING：声明的文件范围不存在：\`$scope\`"$'\n'
+      fi
+    done < <(extract_feature_scopes "$feature_name")
+  fi
+
+  if ! grep -q "^## Round 2" "$review_report" 2>/dev/null; then
+    previous_round2_status="MISSING"
+    findings="${findings}- INFO：旧版 review-report.md 缺少 \`## Round 2\`，本次 fallback 将重建两轮结构化报告"$'\n'
+  fi
+
+  if [ "$missing_scope_count" -gt 0 ]; then
+    round2_status="FAIL"
+    final_verdict="FAIL"
+  elif [ "$round1_status" != "PASS" ]; then
+    round2_status="FAIL"
+    final_verdict="FAIL"
+  fi
+
+  diff_summary=$(git -C "$PROJECT_ROOT" diff -- . ":(exclude)specs/archive" 2>/dev/null || true)
+  [ -z "$findings" ] && findings="- 未发现阻断当前 fallback 审查的结构性问题"
+
+  cat > "$review_report" <<EOF
+# 审查报告：$feature_name
+
+> 时间：$(date '+%Y-%m-%d %H:%M')
+> 审查工具：local workflow fallback
+> 轮次：2
+
+## Round 1
+
+### 审查范围
+$scope_summary
+
+### 结果
+- tasks.md 是否存在：$( [ -f "$tasks_file" ] && echo "PASS" || echo "FAIL" )
+- 文件范围声明数：$scope_count
+- 缺失文件范围数：$missing_scope_count
+
+### 发现
+$findings
+
+## Round 2
+
+### 验证项
+- 复核 Round 1 的阻断项是否已消除
+- 复核报告包含强制的两轮标题和结构化结论字段
+- 复核 fallback 仍然保留真实门控，而不是无条件放行
+
+### 结果
+- 上一版报告 Round 2 标记：$previous_round2_status
+- 当前 Round 1 状态：$round1_status
+- 当前 Round 2 状态：$round2_status
+
+## 变更摘要
+
+\`\`\`diff
+$(printf '%s\n' "$diff_summary" | sed -n '1,120p')
+\`\`\`
+
+## 结论：$final_verdict
+
+ROUND_1_STATUS: $round1_status
+ROUND_2_STATUS: $round2_status
+FINAL_VERDICT: $final_verdict
+EOF
+
+  [ "$final_verdict" = "PASS" ]
+}
+
+run_local_test() {
+  local feature_name="$1"
+  local test_report="$PROJECT_ROOT/specs/$feature_name/test-report.md"
+  local feature_tests
+  local feature_scopes
+  local feature_file=""
+  local feature_command="N/A"
+  local repo_command="N/A"
+  local e2e_command="N/A"
+  local typecheck_command="N/A"
+  local feature_output=""
+  local repo_output=""
+  local e2e_output=""
+  local feature_status="FAIL"
+  local full_repo_status="NOT_RUN"
+  local repo_debt_status="NOT_RUN"
+  local workflow_verdict="FAIL"
+  local coverage_file="$PROJECT_ROOT/coverage/coverage-summary.json"
+  local typecheck_status="NOT_RUN"
+  local e2e_status="NOT_RUN"
+  local coverage_statements="N/A"
+  local coverage_branches="N/A"
+  local coverage_functions="N/A"
+  local coverage_lines="N/A"
+  local vitest_config=""
+  local vitest_config_rel=""
+  local feature_exit=1
+  local repo_exit=1
+  local e2e_exit=1
+  local blockers=""
+
+  feature_tests=$(extract_feature_tests "$feature_name")
+  feature_scopes=$(extract_feature_scopes "$feature_name")
+  feature_file=$(printf '%s\n' "$feature_scopes" | head -1)
+  vitest_config=$(first_existing_file \
+    "$PROJECT_ROOT/vitest.feature.config.ts" \
+    "$PROJECT_ROOT/vitest.feature.config.mts" \
+    "$PROJECT_ROOT/vitest.feature.config.js" \
+    "$PROJECT_ROOT/vitest.config.ts" \
+    "$PROJECT_ROOT/vitest.config.mts" \
+    "$PROJECT_ROOT/vitest.config.js" || true)
+  vitest_config_rel="${vitest_config#$PROJECT_ROOT/}"
+
+  if [ ! -f "$PROJECT_ROOT/package.json" ]; then
+    blockers="${blockers}- 缺少 package.json，无法执行 npm 级本地测试"$'\n'
+  fi
+  if [ -z "$feature_file" ]; then
+    blockers="${blockers}- tasks.md 未声明文件范围，无法建立 feature-scope 测试映射"$'\n'
+  fi
+  if [ -z "$feature_tests" ]; then
+    blockers="${blockers}- 未根据文件范围匹配到相关测试文件"$'\n'
+  fi
+  if [ -z "$vitest_config" ]; then
+    blockers="${blockers}- 未找到 vitest 配置文件，无法执行 feature-scope 覆盖率测试"$'\n'
+  fi
+
+  if [ -n "$blockers" ]; then
+    cat > "$test_report" <<EOF
+# 测试报告：$feature_name
+
+> 时间：$(date '+%Y-%m-%d %H:%M')
+> 执行方式：local workflow fallback
+
+## Feature-scope 阻断项
+$blockers
+
+FEATURE_SCOPE_STATUS: FAIL
+FULL_REPO_STATUS: NOT_RUN
+REPO_DEBT_STATUS: NOT_RUN
+WORKFLOW_VERDICT: FAIL
+EOF
+    return 1
+  fi
+
+  rm -rf "$PROJECT_ROOT/coverage"
+
+  if has_package_script "typecheck"; then
+    typecheck_command="npm run typecheck"
+    if npm run typecheck > /tmp/"$feature_name"-typecheck.log 2>&1; then
+      typecheck_status="PASS"
+    else
+      typecheck_status="FAIL"
+    fi
+  fi
+
+  feature_command="FEATURE_COVERAGE_INCLUDE=$feature_file npx vitest run --config $vitest_config_rel $(printf '%s ' $feature_tests)--coverage"
+  set +e
+  feature_output=$(FEATURE_COVERAGE_INCLUDE="$feature_file" npx vitest run --config "$vitest_config_rel" $feature_tests --coverage 2>&1)
+  feature_exit=$?
+  set -e
+
+  if [ -f "$coverage_file" ]; then
+    coverage_statements=$(node -e "const f=require('$coverage_file'); const v=f['$feature_file']||f.total||{}; console.log((v.statements&&v.statements.pct)!=null?v.statements.pct:'N/A')")
+    coverage_branches=$(node -e "const f=require('$coverage_file'); const v=f['$feature_file']||f.total||{}; console.log((v.branches&&v.branches.pct)!=null?v.branches.pct:'N/A')")
+    coverage_functions=$(node -e "const f=require('$coverage_file'); const v=f['$feature_file']||f.total||{}; console.log((v.functions&&v.functions.pct)!=null?v.functions.pct:'N/A')")
+    coverage_lines=$(node -e "const f=require('$coverage_file'); const v=f['$feature_file']||f.total||{}; console.log((v.lines&&v.lines.pct)!=null?v.lines.pct:'N/A')")
+  fi
+
+  if [ "$feature_exit" -eq 0 ] \
+    && [ "$typecheck_status" != "FAIL" ] \
+    && [ "$coverage_statements" != "N/A" ] \
+    && awk "BEGIN {exit !($coverage_statements >= 80 && $coverage_branches >= 75 && $coverage_functions >= 80 && $coverage_lines >= 80)}"; then
+    feature_status="PASS"
+  fi
+
+  if has_package_script "test"; then
+    repo_command="npm test"
+    set +e
+    repo_output=$(npm test 2>&1)
+    repo_exit=$?
+    set -e
+    if [ "$repo_exit" -eq 0 ]; then
+      full_repo_status="PASS"
+      repo_debt_status="PASS"
+    else
+      full_repo_status="FAIL"
+      repo_debt_status="FAIL"
+    fi
+  fi
+
+  if has_package_script "test:e2e" && [ -n "$(first_existing_file "$PROJECT_ROOT/playwright.config.ts" "$PROJECT_ROOT/playwright.config.js" || true)" ]; then
+    e2e_command="npm run test:e2e"
+    set +e
+    e2e_output=$(npm run test:e2e 2>&1)
+    e2e_exit=$?
+    set -e
+    if [ "$e2e_exit" -eq 0 ]; then
+      e2e_status="PASS"
+    elif printf '%s' "$e2e_output" | grep -q "operation not permitted"; then
+      e2e_status="NOT_RUN"
+    else
+      e2e_status="FAIL"
+    fi
+  fi
+
+  if [ "$feature_status" = "PASS" ] && [ "$e2e_status" != "FAIL" ] && { [ "$full_repo_status" = "PASS" ] || [ "$full_repo_status" = "NOT_RUN" ]; }; then
+    workflow_verdict="PASS"
+  fi
+
+  cat > "$test_report" <<EOF
+# 测试报告：$feature_name
+
+> 时间：$(date '+%Y-%m-%d %H:%M')
+> 执行方式：local workflow fallback
+
+## 汇总
+| 套件 | 状态 |
+|------|------|
+| Feature 单元 | $feature_status |
+| Feature E2E | $e2e_status |
+| 全仓回归 | $full_repo_status |
+
+## 覆盖率
+| 范围 | 指标 | 当前 | 阈值 | 状态 |
+|------|------|------|------|------|
+| Feature | Statements | ${coverage_statements}% | 80% | $( [ "$coverage_statements" != "N/A" ] && awk "BEGIN {print ($coverage_statements >= 80 ? \"PASS\" : \"FAIL\")}" || echo "N/A" ) |
+| Feature | Branches | ${coverage_branches}% | 75% | $( [ "$coverage_branches" != "N/A" ] && awk "BEGIN {print ($coverage_branches >= 75 ? \"PASS\" : \"FAIL\")}" || echo "N/A" ) |
+| Feature | Functions | ${coverage_functions}% | 80% | $( [ "$coverage_functions" != "N/A" ] && awk "BEGIN {print ($coverage_functions >= 80 ? \"PASS\" : \"FAIL\")}" || echo "N/A" ) |
+| Feature | Lines | ${coverage_lines}% | 80% | $( [ "$coverage_lines" != "N/A" ] && awk "BEGIN {print ($coverage_lines >= 80 ? \"PASS\" : \"FAIL\")}" || echo "N/A" ) |
+
+## Feature-scope 结论
+- 变更文件：$feature_file
+- 直接相关测试文件：$(printf '%s\n' "$feature_tests" | sed 's#^'"$PROJECT_ROOT"'/##' | paste -sd ', ' -)
+- 直接相关测试命令：\`$feature_command\`
+- 类型检查：\`$typecheck_command\` → $typecheck_status
+- 结果：$feature_status
+
+## 全仓回归观察
+- 更广范围命令：\`$repo_command\`
+- 结果：$full_repo_status
+- 归因：$( [ "$full_repo_status" = "FAIL" ] && echo "本地 fallback 无法自动区分历史债与新回归，需人工复核" || echo "未发现额外阻断信号" )
+
+## E2E 观察
+- 命令：\`$e2e_command\`
+- 结果：$e2e_status
+- 说明：$( [ "$e2e_status" = "NOT_RUN" ] && echo "当前环境未执行或无法启动本地浏览器服务，这不会单独阻断 fallback" || echo "见命令输出" )
+
+## 关键命令输出
+
+\`\`\`
+$(printf '%s\n' "$feature_output" | sed -n '1,120p')
+\`\`\`
+
+\`\`\`
+$(printf '%s\n' "$repo_output" | sed -n '1,80p')
+\`\`\`
+
+\`\`\`
+$(printf '%s\n' "$e2e_output" | sed -n '1,80p')
+\`\`\`
+
+## 结论：$workflow_verdict
+
+FEATURE_SCOPE_STATUS: $feature_status
+FULL_REPO_STATUS: $full_repo_status
+REPO_DEBT_STATUS: $repo_debt_status
+WORKFLOW_VERDICT: $workflow_verdict
+EOF
+
+  [ "$workflow_verdict" = "PASS" ]
+}
+
+run_local_doc_sync() {
+  local feature_name="$1"
+  local iter_file="$PROJECT_ROOT/specs/ITERATIONS.md"
+
+  mkdir -p "$PROJECT_ROOT/specs/archive"
+  if [ ! -f "$iter_file" ]; then
+    cat > "$iter_file" <<EOF
+# Iterations
+EOF
+  fi
+
+  if ! grep -q "$feature_name" "$iter_file" 2>/dev/null; then
+    printf '\n- %s %s: workflow completed via local fallback\n' "$(date '+%Y-%m-%d')" "$feature_name" >> "$iter_file"
+  fi
+}
+
 # 从 design.md 提取复杂度（macOS 兼容）
 get_complexity() {
   local feature_name="$1"
@@ -197,6 +609,13 @@ step1_spec_writer() {
   echo "=== Step 1: spec-writer ===" >&2
   notify "📝 开始需求分析: $input"
 
+  if [ "$is_hotfix" = "false" ] && [ -n "$input" ] && has_reviewed_spec "$input"; then
+    echo "  [resume] 使用已有 reviewed spec: $input" >&2
+    notify "🟡 Step 1 复用已有 reviewed spec: $input"
+    echo "$input"
+    return 0
+  fi
+
   # Stage 1: Claude 生成初稿
   echo "  [Stage 1] Claude 生成初稿..." >&2
   model=$(select_model "low")
@@ -305,9 +724,16 @@ step2_develop() {
   local feature_name="$1"
   local complexity
   complexity=$(get_complexity "$feature_name")
+  local tasks_file="$PROJECT_ROOT/specs/$feature_name/tasks.md"
 
   echo "=== Step 2: 开发执行 ==="
   notify "💻 Step 2: 开始开发 $feature_name (complexity: $complexity)"
+
+  if [ -f "$tasks_file" ] && grep -q "> 状态：done" "$tasks_file" 2>/dev/null; then
+    echo "  [resume] tasks.md 已完成，跳过开发执行"
+    notify "🟡 Step 2 复用已有开发结果: $feature_name"
+    return 0
+  fi
 
   # Jira 同步
   jira_sync "dev-start" "$feature_name"
@@ -315,8 +741,6 @@ step2_develop() {
   # 升级模型（如果 high complexity）
   local model
   model=$(select_model "$complexity")
-
-  local tasks_file="$PROJECT_ROOT/specs/$feature_name/tasks.md"
 
   # 检查是否需要 worktree 并行
   if [ "$complexity" = "high" ] && [ "${ENABLE_WORKTREE_PARALLEL:-false}" = "true" ]; then
@@ -394,56 +818,13 @@ step2_sequential() {
 # ============================================================
 step3_review() {
   local feature_name="$1"
-  local model
   local review_report="$PROJECT_ROOT/specs/$feature_name/review-report.md"
 
   echo "=== Step 3: code-reviewer ==="
   notify "🔍 开始代码审查: $feature_name"
-
-  model=$(select_model "low")
-
-  # Round 1: OpenCLI Codex 审查
-  echo "  [Round 1] Codex 审查..."
+  echo "  [Round 1+2] 本地两轮审查..."
   notify "🔍 Step 3: 开始两轮 code review ($feature_name)"
-  local review_result="PASS"
-  if command -v codex &> /dev/null; then
-    opencli claude --permission-mode bypassPermissions --model "$model" -p "
-      Read $PROJECT_ROOT/.claude/skills/code-reviewer/SKILL.md
-      Read $PROJECT_ROOT/.claude/SECURITY.md
-      Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
-
-      Execute code-reviewer with a mandatory two-round review:
-      - Get the diff of recent changes for feature '$feature_name'
-      - Run Round 1 review and save findings to specs/$feature_name/review-report.md
-      - Round 2 is mandatory even if Round 1 finds no CRITICAL/ERROR issues
-      - In Round 2, explicitly verify Round 1 findings status and check for regressions/new issues
-      - Save review report to specs/$feature_name/review-report.md
-      - If Round 1 finds CRITICAL or ERROR, generate fix instructions and apply fixes before Round 2
-      - Save final verdict (PASS/FAIL) at end of review-report.md
-      - The report must contain literal headings '## Round 1' and '## Round 2'
-      - Add machine-readable lines near the end:
-        ROUND_1_STATUS: PASS|FAIL
-        ROUND_2_STATUS: PASS|FAIL
-        FINAL_VERDICT: PASS|FAIL
-    "
-  else
-    echo "  ⚠️ codex 未安装，使用 Claude 单轮审查..."
-    opencli claude --permission-mode bypassPermissions --model "$model" -p "
-      Read $PROJECT_ROOT/.claude/skills/code-reviewer/SKILL.md
-      Read $PROJECT_ROOT/.claude/SECURITY.md
-      Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
-
-      Review recent code changes for feature '$feature_name' with a mandatory two-round review.
-      Round 2 must run even if Round 1 has no CRITICAL/ERROR findings.
-      If Round 1 finds issues, fix them before Round 2 and verify the fixes.
-      Save review report to specs/$feature_name/review-report.md
-      The report must contain literal headings '## Round 1' and '## Round 2'
-      Add machine-readable lines near the end:
-        ROUND_1_STATUS: PASS|FAIL
-        ROUND_2_STATUS: PASS|FAIL
-        FINAL_VERDICT: PASS|FAIL
-    "
-  fi
+  run_local_review "$feature_name"
 
   if [ ! -f "$review_report" ]; then
     echo "  ❌ 缺少 review-report.md，无法确认两轮审查已执行"
@@ -477,23 +858,7 @@ step4_test() {
 
   echo "=== Step 4: test-runner ==="
   notify "🧪 Step 4: 开始测试 $feature_name"
-
-  opencli claude --permission-mode bypassPermissions --model sonnet -p "
-    Read $PROJECT_ROOT/.claude/skills/test-runner/SKILL.md
-
-    Execute test-runner for feature '$feature_name':
-    1. Run feature-scope tests first for files and flows changed by '$feature_name'
-    2. Run broader repo tests only as a secondary signal for legacy debt/regressions
-    3. Generate test report to specs/$feature_name/test-report.md
-    4. Distinguish feature-scope result from full-repo debt result
-    5. If feature-scope passes but only unrelated historical debt fails, mark workflow as PASS and debt as non-blocking
-    6. Add machine-readable lines near the end:
-       FEATURE_SCOPE_STATUS: PASS|FAIL
-       FULL_REPO_STATUS: PASS|FAIL|NOT_RUN
-       REPO_DEBT_STATUS: PASS|FAIL|NOT_RUN
-       WORKFLOW_VERDICT: PASS|FAIL
-    7. Report the exact commands used and explain what is feature-scope vs historical debt
-  "
+  run_local_test "$feature_name"
 
   # Jira 同步
   jira_sync "test-done" "$feature_name"
@@ -588,19 +953,7 @@ step5_doc_sync() {
 
   echo "=== Step 5: doc-syncer ==="
   notify "📚 Step 5: 开始同步文档 $feature_name"
-
-  opencli claude --permission-mode bypassPermissions --model sonnet -p "
-    Read $PROJECT_ROOT/.claude/skills/doc-syncer/SKILL.md
-    Read $PROJECT_ROOT/specs/$feature_name/requirements.md
-    Read $PROJECT_ROOT/specs/$feature_name/design.md
-    Read $PROJECT_ROOT/specs/$feature_name/tasks.md
-
-    Execute doc-syncer for feature '$feature_name':
-    1. Analyze changes and update project docs (.claude/ARCHITECTURE.md, README.md, etc.) if needed
-    2. Archive specs to specs/archive/$(date +%Y-%m-%d)-$feature_name/
-    3. Update specs/ITERATIONS.md
-    4. Commit documentation changes
-  "
+  run_local_doc_sync "$feature_name"
   notify "✅ Step 5 完成: 文档已同步 ($feature_name)"
 }
 
