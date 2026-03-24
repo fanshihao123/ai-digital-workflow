@@ -159,6 +159,10 @@ extract_feature_tests() {
     fi
   done
 
+  if [ ${#files[@]} -eq 0 ]; then
+    return 0
+  fi
+
   printf '%s\n' "${files[@]}" | awk 'NF && !seen[$0]++'
 }
 
