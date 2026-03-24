@@ -11,3 +11,4 @@ model: sonnet
 !`bash .claude/orchestrator/scripts/feishu-handler.sh "/test"`
 
 执行后总结真实测试结果。
+必须区分 feature-scope 是否通过，以及是否只是被全仓历史技术债拖累。

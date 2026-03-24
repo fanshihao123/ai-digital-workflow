@@ -200,16 +200,18 @@ complexity: high 且 ENABLE_WORKTREE_PARALLEL=true?
     |
  CRITICAL/ERROR?
    / \
- yes   no → PASS
-  |
- 生成修复指令 → Claude Code 修复
-  |
- Round 2: codex exec --full-auto "验证修复"
-  |
- 仍有问题？ → 报告给编排器
-  |
- ALL_CLEAR → PASS
+ yes   no
+  |     |
+ 修复     记录 Round 1 无阻断问题
+  |     |
+  └──→ Round 2: codex exec --full-auto "验证修复/验证无问题结论"
+          |
+      仍有问题？ → 报告给编排器
+          |
+      ALL_CLEAR → PASS
 ```
+
+**强制规则**：Round 2 必须真实执行，不能因为 Round 1 “没有严重问题”就跳过。
 
 **扩展触发点**：
 - human-gate G1（如启用）：审查通过后检测安全变更 → 条件阻塞
@@ -220,12 +222,22 @@ complexity: high 且 ENABLE_WORKTREE_PARALLEL=true?
 ```
 Jest + Playwright (Chrome MCP)
          |
-  全部通过 + 覆盖率 ≥ 80%?
+  先判定 feature-scope 是否通过
+         |
+  feature-scope 通过?
    / \
- yes   no → 进入 Step 4.5 自动修复一轮 → 仍失败才终止
-  |
- PASS
+ no   yes
+ |      |
+FAIL   再看全仓结果是回归还是历史债
+          |
+   历史债? / 本 feature 回归?
+      |             |
+ non-blocking       FAIL → 进入 Step 4.5 自动修复一轮 → 仍失败才终止
+      |
+     PASS
 ```
+
+**强制规则**：test-runner 必须明确区分“feature 自身通过”与“全仓技术债失败”，workflow 只因前者失败或确认回归而阻断。
 
 **扩展触发点**：
 - jira-sync（如启用）：`sync-jira.sh {key} test-done`
@@ -255,7 +267,7 @@ deploy-executor（如启用）→ 部署 + 健康检查 + 自动回滚
 - Step 1：spec 产物路径 + Codex 审查结果
 - Step 2：开发完成的任务、涉及文件
 - Step 3：两轮 code review 结果
-- Step 4：测试命令、通过/失败、覆盖率
+- Step 4：测试命令、feature-scope 结果、全仓技术债结果、覆盖率
 - Step 5：文档同步和归档结果
 - Step 6：部署/跳过原因
 - Step 7：最终摘要

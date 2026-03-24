@@ -45,6 +45,30 @@ notify() {
   bash "$SCRIPT_DIR/feishu-notify.sh" "$message" 2>/dev/null || true
 }
 
+count_pattern_in_file() {
+  local pattern="$1"
+  local file="$2"
+  local count
+  count=$(grep -c "$pattern" "$file" 2>/dev/null || true)
+  count="${count//$'\n'/}"
+  if [[ ! "$count" =~ ^[0-9]+$ ]]; then
+    count=0
+  fi
+  echo "$count"
+}
+
+extract_report_field() {
+  local file="$1"
+  local field="$2"
+  local value=""
+
+  if [ -f "$file" ]; then
+    value=$(sed -n "s/^$field:[[:space:]]*//p" "$file" 2>/dev/null | tail -1 | tr -d '\r')
+  fi
+
+  echo "$value"
+}
+
 # 从 design.md 提取复杂度（macOS 兼容）
 get_complexity() {
   local feature_name="$1"
@@ -328,7 +352,7 @@ step2_sequential() {
 
   # 检查是否有 antigravity 任务需要 ui-restorer
   local has_antigravity
-  has_antigravity=$(grep -c "agent: antigravity" "$tasks_file" 2>/dev/null || echo 0)
+  has_antigravity=$(count_pattern_in_file "agent: antigravity" "$tasks_file")
 
   if [ "$has_antigravity" -gt 0 ] && [ "${ENABLE_UI_RESTORER:-false}" = "true" ]; then
     echo "  [ui-restorer] 检测到 $has_antigravity 个 antigravity 任务"
@@ -371,6 +395,7 @@ step2_sequential() {
 step3_review() {
   local feature_name="$1"
   local model
+  local review_report="$PROJECT_ROOT/specs/$feature_name/review-report.md"
 
   echo "=== Step 3: code-reviewer ==="
   notify "🔍 开始代码审查: $feature_name"
@@ -387,13 +412,19 @@ step3_review() {
       Read $PROJECT_ROOT/.claude/SECURITY.md
       Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
 
-      Execute code-reviewer Round 1:
+      Execute code-reviewer with a mandatory two-round review:
       - Get the diff of recent changes for feature '$feature_name'
-      - Use codex exec to review the changes
+      - Run Round 1 review and save findings to specs/$feature_name/review-report.md
+      - Round 2 is mandatory even if Round 1 finds no CRITICAL/ERROR issues
+      - In Round 2, explicitly verify Round 1 findings status and check for regressions/new issues
       - Save review report to specs/$feature_name/review-report.md
-      - If CRITICAL or ERROR found, generate fix instructions and apply fixes
-      - Then run Round 2 to verify fixes
+      - If Round 1 finds CRITICAL or ERROR, generate fix instructions and apply fixes before Round 2
       - Save final verdict (PASS/FAIL) at end of review-report.md
+      - The report must contain literal headings '## Round 1' and '## Round 2'
+      - Add machine-readable lines near the end:
+        ROUND_1_STATUS: PASS|FAIL
+        ROUND_2_STATUS: PASS|FAIL
+        FINAL_VERDICT: PASS|FAIL
     "
   else
     echo "  ⚠️ codex 未安装，使用 Claude 单轮审查..."
@@ -402,11 +433,28 @@ step3_review() {
       Read $PROJECT_ROOT/.claude/SECURITY.md
       Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
 
-      Review recent code changes for feature '$feature_name'.
-      Check for CRITICAL/ERROR issues.
-      If found, fix them and verify the fixes.
+      Review recent code changes for feature '$feature_name' with a mandatory two-round review.
+      Round 2 must run even if Round 1 has no CRITICAL/ERROR findings.
+      If Round 1 finds issues, fix them before Round 2 and verify the fixes.
       Save review report to specs/$feature_name/review-report.md
+      The report must contain literal headings '## Round 1' and '## Round 2'
+      Add machine-readable lines near the end:
+        ROUND_1_STATUS: PASS|FAIL
+        ROUND_2_STATUS: PASS|FAIL
+        FINAL_VERDICT: PASS|FAIL
     "
+  fi
+
+  if [ ! -f "$review_report" ]; then
+    echo "  ❌ 缺少 review-report.md，无法确认两轮审查已执行"
+    notify "❌ Step 3 失败: 缺少 review-report.md ($feature_name)"
+    return 1
+  fi
+
+  if ! grep -q "^## Round 1" "$review_report" 2>/dev/null || ! grep -q "^## Round 2" "$review_report" 2>/dev/null; then
+    echo "  ❌ review-report.md 缺少两轮审查标记"
+    notify "❌ Step 3 失败: 未真实执行满两轮 code review ($feature_name)"
+    return 1
   fi
 
   # human-gate G1：安全门控（条件触发）
@@ -422,6 +470,10 @@ step3_review() {
 # ============================================================
 step4_test() {
   local feature_name="$1"
+  local test_report="$PROJECT_ROOT/specs/$feature_name/test-report.md"
+  local feature_status
+  local repo_debt_status
+  local workflow_verdict
 
   echo "=== Step 4: test-runner ==="
   notify "🧪 Step 4: 开始测试 $feature_name"
@@ -430,25 +482,50 @@ step4_test() {
     Read $PROJECT_ROOT/.claude/skills/test-runner/SKILL.md
 
     Execute test-runner for feature '$feature_name':
-    1. Run unit tests (Jest/Vitest) with coverage
-    2. Run E2E tests (Playwright, prefer Chrome MCP if available)
+    1. Run feature-scope tests first for files and flows changed by '$feature_name'
+    2. Run broader repo tests only as a secondary signal for legacy debt/regressions
     3. Generate test report to specs/$feature_name/test-report.md
-    4. Check coverage thresholds (Statements ≥ 80%, Branches ≥ 75%, Functions ≥ 80%)
-    5. Report PASS or FAIL with details
+    4. Distinguish feature-scope result from full-repo debt result
+    5. If feature-scope passes but only unrelated historical debt fails, mark workflow as PASS and debt as non-blocking
+    6. Add machine-readable lines near the end:
+       FEATURE_SCOPE_STATUS: PASS|FAIL
+       FULL_REPO_STATUS: PASS|FAIL|NOT_RUN
+       REPO_DEBT_STATUS: PASS|FAIL|NOT_RUN
+       WORKFLOW_VERDICT: PASS|FAIL
+    7. Report the exact commands used and explain what is feature-scope vs historical debt
   "
 
   # Jira 同步
   jira_sync "test-done" "$feature_name"
 
-  # 检查测试结果
-  local test_report="$PROJECT_ROOT/specs/$feature_name/test-report.md"
-  if [ -f "$test_report" ] && grep -q "FAIL" "$test_report" 2>/dev/null; then
+  if [ ! -f "$test_report" ]; then
+    echo "  ❌ 缺少 test-report.md"
+    notify "❌ 测试失败: 缺少 test-report.md ($feature_name)"
+    return 1
+  fi
+
+  feature_status=$(extract_report_field "$test_report" "FEATURE_SCOPE_STATUS")
+  repo_debt_status=$(extract_report_field "$test_report" "REPO_DEBT_STATUS")
+  workflow_verdict=$(extract_report_field "$test_report" "WORKFLOW_VERDICT")
+
+  if [ -z "$workflow_verdict" ]; then
+    echo "  ❌ test-report.md 缺少 WORKFLOW_VERDICT，无法判定测试门控"
+    notify "❌ 测试失败: test-report.md 缺少结构化结论 ($feature_name)"
+    return 1
+  fi
+
+  if [ "$workflow_verdict" = "FAIL" ]; then
     echo "  ⚠️ 测试未通过"
     notify "❌ 测试失败: $feature_name\n查看 specs/$feature_name/test-report.md"
     return 1
   fi
 
   echo "  ✅ 测试通过"
+  if [ "$repo_debt_status" = "FAIL" ] && [ "$feature_status" = "PASS" ]; then
+    echo "  ℹ️ feature 自身通过，存在非阻断的全仓技术债失败"
+    notify "✅ 测试通过（feature-scope）: $feature_name\n存在非阻断历史测试债，详见 test-report.md"
+    return 0
+  fi
   notify "✅ Step 4 完成: 测试通过 ($feature_name)"
 }
 
@@ -458,6 +535,7 @@ step4_test() {
 step4_fix_and_retry() {
   local feature_name="$1"
   local test_report="$PROJECT_ROOT/specs/$feature_name/test-report.md"
+  local workflow_verdict
 
   echo "=== Step 4.5: 测试失败自动修复 ==="
   notify "🩹 Step 4.5: 开始自动修复测试失败 ($feature_name)"
@@ -477,16 +555,21 @@ step4_fix_and_retry() {
 
     Execute a single test-fix loop for feature '$feature_name':
     1. Analyze the failing tests from test-report.md
-    2. Prefer fixing test/implementation mismatch in the smallest safe way
-    3. If E2E already passes and only unit tests fail due to outdated assumptions, prefer fixing unit tests
+    2. Only fix blockers that make FEATURE_SCOPE_STATUS fail
+    3. Do not spend this loop fixing unrelated historical repo-wide debt
     4. Apply the minimal patch
-    5. Re-run the most relevant unit tests first
-    6. Then re-run full project tests
-    7. Update specs/$feature_name/test-report.md with the new result summary
-    8. If tests still fail, clearly explain the remaining blockers
+    5. Re-run the most relevant feature-scope tests first
+    6. Re-run broader repo tests only to re-check whether debt remains non-blocking or has become a real regression
+    7. Update specs/$feature_name/test-report.md with the new result summary and machine-readable lines:
+       FEATURE_SCOPE_STATUS: PASS|FAIL
+       FULL_REPO_STATUS: PASS|FAIL|NOT_RUN
+       REPO_DEBT_STATUS: PASS|FAIL|NOT_RUN
+       WORKFLOW_VERDICT: PASS|FAIL
+    8. If tests still fail, clearly explain whether the blocker is in feature scope or historical debt
   "
 
-  if [ -f "$test_report" ] && grep -q "结论：❌ FAIL\|## 结论：❌ FAIL\|FAIL" "$test_report" 2>/dev/null; then
+  workflow_verdict=$(extract_report_field "$test_report" "WORKFLOW_VERDICT")
+  if [ "$workflow_verdict" = "FAIL" ]; then
     echo "  ⚠️ 自动修复后测试仍失败"
     notify "❌ Step 4.5 结束: 自动修复后仍失败 ($feature_name)"
     return 1
@@ -570,6 +653,8 @@ step7_notify() {
 
   # 收集信息用于富通知
   local coverage="N/A"
+  local feature_test_status="N/A"
+  local repo_debt_status="N/A"
   local review_status="N/A"
   local commit_hash
   commit_hash=$(git -C "$PROJECT_ROOT" log --oneline -1 --format="%h" 2>/dev/null || echo "N/A")
@@ -580,6 +665,8 @@ step7_notify() {
   local test_report="$PROJECT_ROOT/specs/$feature_name/test-report.md"
   if [ -f "$test_report" ]; then
     coverage=$(grep -oP 'Statements\s*\|\s*\K\d+%' "$test_report" 2>/dev/null || echo "N/A")
+    feature_test_status=$(extract_report_field "$test_report" "FEATURE_SCOPE_STATUS")
+    repo_debt_status=$(extract_report_field "$test_report" "REPO_DEBT_STATUS")
   fi
 
   # 从审查报告提取结论
@@ -604,7 +691,7 @@ step7_notify() {
           \"elements\": [
             {
               \"tag\": \"markdown\",
-              \"content\": \"**功能**: $feature_name\n**覆盖率**: $coverage\n**审查状态**: $review_status\n**最新提交**: $commit_hash $commit_msg\"
+              \"content\": \"**功能**: $feature_name\n**Feature 测试**: ${feature_test_status:-N/A}\n**全仓技术债**: ${repo_debt_status:-N/A}\n**覆盖率**: $coverage\n**审查状态**: $review_status\n**最新提交**: $commit_hash $commit_msg\"
             },
             {
               \"tag\": \"note\",
@@ -619,7 +706,7 @@ step7_notify() {
   fi
 
   echo "  ✅ 流水线完成: $feature_name"
-  echo "    覆盖率: $coverage | 审查: $review_status | 提交: $commit_hash"
+  echo "    Feature 测试: ${feature_test_status:-N/A} | 全仓技术债: ${repo_debt_status:-N/A} | 覆盖率: $coverage | 审查: $review_status | 提交: $commit_hash"
 }
 
 # ============================================================

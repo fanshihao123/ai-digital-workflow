@@ -19,11 +19,12 @@ Claude Code 提交代码
        |
   有 CRITICAL/ERROR？
      /        \
-   yes          no → PASS → 下一阶段
-    |
-  生成修复指令 → Claude Code 修复
-    |
-  Round 2：验证修复 + 检查新问题
+   yes          no
+    |            |
+  生成修复指令     记录 Round 1 无阻断问题
+  → Claude Code 修复   |
+    |                  |
+    └──────→ Round 2：验证修复/验证无问题结论 + 检查新问题
     |
   仍有问题？
      /        \
@@ -78,8 +79,13 @@ Round 1 发现 CRITICAL 或 ERROR 时，生成修复任务：
 
 ## Round 2：验证审查
 
+Round 2 是**强制阶段**，即使 Round 1 没有 CRITICAL/ERROR 也必须执行。
+第二轮至少要做两件事：
+- 验证 Round 1 的结论是否站得住
+- 再扫一遍，确认没有遗漏和修复引入的新问题
+
 ```bash
-# 对比 Round 1 和修复后的 diff
+# 对比 Round 1 和修复后的 diff；如果 Round 1 无修复，也重新审查当前 diff
 git diff HEAD~1..HEAD > /tmp/fix-diff.diff
 
 # OpenCLI 调度 Codex 第二轮审查
@@ -122,6 +128,10 @@ codex exec --full-auto "
 - 未修复: {count}
 
 ## 结论：PASS | FAIL
+
+ROUND_1_STATUS: PASS | FAIL
+ROUND_2_STATUS: PASS | FAIL
+FINAL_VERDICT: PASS | FAIL
 ```
 
 ## Checklist 替换
