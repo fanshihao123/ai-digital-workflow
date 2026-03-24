@@ -7,7 +7,7 @@ COMPLEXITY="${1:-low}"
 
 if [ "$COMPLEXITY" = "high" ]; then
   # 高复杂度 → 尝试 Opus 4.6
-  claude --model opus -p "echo ok" > /dev/null 2>&1
+  opencli claude --permission-mode bypassPermissions --model opus -p "echo ok" > /dev/null 2>&1
   if [ $? -eq 0 ]; then
     export CLAUDE_MODEL="opus"
     echo "🧠 模型选择: Claude Opus 4.6 (complexity: high)"

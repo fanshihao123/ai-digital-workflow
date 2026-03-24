@@ -1,6 +1,6 @@
 # AI数字员工24小时可编排工作流架构设计
 
-> 4 核心 Skill + 5 可插拔扩展 · 飞书 OpenClaw 触发 · Claude Code 执行 · 全自动 / 人机协同
+> 4 核心 Skill + 5 可插拔扩展 · 飞书 OpenClaw 触发 · OpenCLI 包装的 Claude Code 执行 · 全自动 / 人机协同
 
 ## 一句话定义
 
@@ -12,7 +12,7 @@
 飞书消息 ──→ OpenClaw (7×24 在线)
                 │
                 ↓
-         Claude Code CLI
+   OpenCLI → Claude Code CLI
                 │  工作目录 = 你的项目
                 │  自动加载 .claude/ 下全套 skill
                 ↓
@@ -62,7 +62,10 @@ vim .claude/CODING_GUIDELINES.md  # 编码规范
 # 3. 配置 .env
 cp .env.ai-digital-workflow .env && vim .env
 
-# 4. 在飞书中使用
+# 4. 推荐本地命令入口（统一 OpenCLI 风格）
+opencli claude --permission-mode bypassPermissions -p '/start-workflow 添加用户注册页面'
+
+# 5. 在飞书中使用
 @龙虾 /start-workflow 添加用户注册页面
 ```
 
@@ -120,7 +123,7 @@ specs/
 
 ## 技术栈依赖
 
-- **Claude Code** — 核心执行引擎
+- **OpenCLI + Claude Code** — 核心执行引擎（统一入口：`opencli claude ...`）
 - **OpenClaw** — 飞书消息网关（7×24 在线）
 - **OpenCLI + Codex** — 代码审查（可选）
 - **Antigravity + Figma MCP** — UI 设计还原（可选）

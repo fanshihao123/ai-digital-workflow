@@ -56,7 +56,7 @@ for AGENT_ID in "${AGENTS[@]}"; do
 
     # 调度冲突解决 Agent
     CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null | tr '\n' ' ')
-    claude --model sonnet --print "
+    opencli claude --model sonnet --print "
       你在冲突解决 worktree 中工作。
       以下文件存在合并冲突: $CONFLICT_FILES
       请解决所有冲突标记（<<<<<<< ======= >>>>>>>），

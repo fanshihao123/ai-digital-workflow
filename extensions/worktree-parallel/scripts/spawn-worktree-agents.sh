@@ -66,7 +66,7 @@ for GROUP in $GROUPS; do
         echo "  🤖 调度开发代理: $AGENT_ID → $WORKTREE_DIR"
         (
           cd "$ABS_WORKTREE"
-          claude --model sonnet --print "
+          opencli claude --model sonnet --print "
             你是 ${AGENT_ID} 开发代理，在隔离的 Git worktree 中工作。
 
             工作目录: $ABS_WORKTREE
@@ -106,7 +106,7 @@ for GROUP in $GROUPS; do
         echo "  🧪 调度测试代理: $AGENT_ID → $WORKTREE_DIR"
         (
           cd "$ABS_WORKTREE"
-          claude --model sonnet --print "
+          opencli claude --model sonnet --print "
             你是测试代理，在隔离的 worktree 中工作。
             运行 npm test 和 npx playwright test。
             只修改 __tests__/ 和 e2e/ 目录下的文件。

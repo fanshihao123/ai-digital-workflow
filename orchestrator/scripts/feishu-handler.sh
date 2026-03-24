@@ -176,7 +176,7 @@ step1_spec_writer() {
   # Stage 1: Claude 生成初稿
   echo "  [Stage 1] Claude 生成初稿..." >&2
   model=$(select_model "low")
-  claude --model "$model" -p "
+  opencli claude --permission-mode bypassPermissions --model "$model" -p "
     Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
     Read $PROJECT_ROOT/.claude/CLAUDE.md
     Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
@@ -244,7 +244,7 @@ step1_spec_writer() {
   echo "  [Stage 3] Claude 复审 + 定稿..." >&2
   if [ -f "$PROJECT_ROOT/specs/$feature_name/spec-review.md" ]; then
     model=$(select_model "$complexity")
-    claude --model "$model" -p "
+    opencli claude --permission-mode bypassPermissions --model "$model" -p "
       Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
       Read $PROJECT_ROOT/specs/$feature_name/spec-review.md
       Read $PROJECT_ROOT/specs/$feature_name/requirements.md
@@ -333,7 +333,7 @@ step2_sequential() {
   if [ "$has_antigravity" -gt 0 ] && [ "${ENABLE_UI_RESTORER:-false}" = "true" ]; then
     echo "  [ui-restorer] 检测到 $has_antigravity 个 antigravity 任务"
     # 先执行 antigravity 任务（UI 还原）
-    claude --model "$model" -p "
+    opencli claude --permission-mode bypassPermissions --model "$model" -p "
       Read $PROJECT_ROOT/.claude/extensions/ui-restorer/SKILL.md
       Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
       Read $tasks_file
@@ -352,7 +352,7 @@ step2_sequential() {
       echo "  ⚠️ 发现 antigravity 任务但 ENABLE_UI_RESTORER 未启用，使用 Claude Code 执行"
     fi
     # 正常 Claude Code 顺序执行
-    claude --model "$model" -p "
+    opencli claude --permission-mode bypassPermissions --model "$model" -p "
       Read $tasks_file
       Read $PROJECT_ROOT/.claude/CLAUDE.md
       Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
@@ -382,7 +382,7 @@ step3_review() {
   notify "🔍 Step 3: 开始两轮 code review ($feature_name)"
   local review_result="PASS"
   if command -v codex &> /dev/null; then
-    claude --model "$model" -p "
+    opencli claude --permission-mode bypassPermissions --model "$model" -p "
       Read $PROJECT_ROOT/.claude/skills/code-reviewer/SKILL.md
       Read $PROJECT_ROOT/.claude/SECURITY.md
       Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
@@ -397,7 +397,7 @@ step3_review() {
     "
   else
     echo "  ⚠️ codex 未安装，使用 Claude 单轮审查..."
-    claude --model "$model" -p "
+    opencli claude --permission-mode bypassPermissions --model "$model" -p "
       Read $PROJECT_ROOT/.claude/skills/code-reviewer/SKILL.md
       Read $PROJECT_ROOT/.claude/SECURITY.md
       Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
@@ -426,7 +426,7 @@ step4_test() {
   echo "=== Step 4: test-runner ==="
   notify "🧪 Step 4: 开始测试 $feature_name"
 
-  claude --model sonnet -p "
+  opencli claude --permission-mode bypassPermissions --model sonnet -p "
     Read $PROJECT_ROOT/.claude/skills/test-runner/SKILL.md
 
     Execute test-runner for feature '$feature_name':
@@ -455,13 +455,58 @@ step4_test() {
 # ============================================================
 # Step 5：doc-syncer
 # ============================================================
+step4_fix_and_retry() {
+  local feature_name="$1"
+  local test_report="$PROJECT_ROOT/specs/$feature_name/test-report.md"
+
+  echo "=== Step 4.5: 测试失败自动修复 ==="
+  notify "🩹 Step 4.5: 开始自动修复测试失败 ($feature_name)"
+
+  if [ ! -f "$test_report" ]; then
+    echo "  ❌ 缺少 test-report.md，无法进入修复回路"
+    notify "❌ Step 4.5 失败: 缺少 test-report.md ($feature_name)"
+    return 1
+  fi
+
+  opencli claude --permission-mode bypassPermissions --model sonnet -p "
+    Read $PROJECT_ROOT/.claude/skills/test-runner/SKILL.md
+    Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
+    Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
+    Read $PROJECT_ROOT/specs/$feature_name/test-report.md
+    Read $PROJECT_ROOT/specs/$feature_name/tasks.md
+
+    Execute a single test-fix loop for feature '$feature_name':
+    1. Analyze the failing tests from test-report.md
+    2. Prefer fixing test/implementation mismatch in the smallest safe way
+    3. If E2E already passes and only unit tests fail due to outdated assumptions, prefer fixing unit tests
+    4. Apply the minimal patch
+    5. Re-run the most relevant unit tests first
+    6. Then re-run full project tests
+    7. Update specs/$feature_name/test-report.md with the new result summary
+    8. If tests still fail, clearly explain the remaining blockers
+  "
+
+  if [ -f "$test_report" ] && grep -q "结论：❌ FAIL\|## 结论：❌ FAIL\|FAIL" "$test_report" 2>/dev/null; then
+    echo "  ⚠️ 自动修复后测试仍失败"
+    notify "❌ Step 4.5 结束: 自动修复后仍失败 ($feature_name)"
+    return 1
+  fi
+
+  echo "  ✅ 自动修复后测试通过"
+  notify "✅ Step 4.5 完成: 自动修复并重测通过 ($feature_name)"
+  return 0
+}
+
+# ============================================================
+# Step 5：doc-syncer
+# ============================================================
 step5_doc_sync() {
   local feature_name="$1"
 
   echo "=== Step 5: doc-syncer ==="
   notify "📚 Step 5: 开始同步文档 $feature_name"
 
-  claude --model sonnet -p "
+  opencli claude --permission-mode bypassPermissions --model sonnet -p "
     Read $PROJECT_ROOT/.claude/skills/doc-syncer/SKILL.md
     Read $PROJECT_ROOT/specs/$feature_name/requirements.md
     Read $PROJECT_ROOT/specs/$feature_name/design.md
@@ -497,7 +542,7 @@ step6_deploy() {
     echo "  [deploy-executor] 执行部署..."
     notify "🚀 开始部署: $feature_name"
 
-    claude --model sonnet -p "
+    opencli claude --permission-mode bypassPermissions --model sonnet -p "
       Read $PROJECT_ROOT/.claude/extensions/deploy-executor/SKILL.md
 
       Execute deploy-executor for feature '$feature_name':
@@ -612,9 +657,13 @@ run_full_pipeline() {
 
   # Step 4
   step4_test "$feature_name" || {
-    echo "  ⚠️ 测试失败，编排器决定是否回退 Step 2"
-    notify "⚠️ 测试失败: $feature_name — 需人工决策是否回退"
-    return 1
+    echo "  ⚠️ 测试失败，进入自动修复回路"
+    notify "⚠️ Step 4 失败: $feature_name — 进入自动修复回路"
+    step4_fix_and_retry "$feature_name" || {
+      echo "  ❌ 自动修复回路失败，流水线终止"
+      notify "❌ 自动修复回路失败: $feature_name"
+      return 1
+    }
   }
 
   # Step 5
@@ -665,7 +714,7 @@ cmd_rollback() {
     bash "$PROJECT_ROOT/.claude/extensions/deploy-executor/scripts/rollback.sh" "$feature_name"
   else
     # 使用 git revert 作为默认回滚方式
-    claude --model sonnet -p "
+    opencli claude --permission-mode bypassPermissions --model sonnet -p "
       Read $PROJECT_ROOT/.claude/extensions/deploy-executor/SKILL.md
       Rollback feature '$feature_name': git revert the relevant commits and push.
     "
@@ -702,7 +751,7 @@ if [[ "$MSG_TEXT" == /* ]]; then
         step3_review "$FEATURE"
       else
         MODEL=$(select_model "low")
-        claude --model "$MODEL" -p "
+        opencli claude --permission-mode bypassPermissions --model "$MODEL" -p "
           Read $PROJECT_ROOT/.claude/skills/code-reviewer/SKILL.md
           Read $PROJECT_ROOT/.claude/SECURITY.md
           Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
@@ -716,7 +765,7 @@ if [[ "$MSG_TEXT" == /* ]]; then
       if [ -n "$FEATURE" ]; then
         step4_test "$FEATURE"
       else
-        claude --model sonnet -p "
+        opencli claude --permission-mode bypassPermissions --model sonnet -p "
           Read $PROJECT_ROOT/.claude/skills/test-runner/SKILL.md
           Run all tests and generate report.
         "

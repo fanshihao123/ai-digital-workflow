@@ -92,15 +92,15 @@ complexity 判定 → 选择模型
 
 ```bash
 # high complexity → 优先 Opus
-claude --model opus -p "执行任务..." 2>/dev/null
+opencli claude --permission-mode bypassPermissions --model opus -p "执行任务..." 2>/dev/null
 if [ $? -ne 0 ]; then
   # 额度不足或 Opus 不可用 → 降级 Sonnet
   echo "⚠️ Opus 4.6 不可用，降级使用 Sonnet"
-  claude --model sonnet -p "执行任务..."
+  opencli claude --permission-mode bypassPermissions --model sonnet -p "执行任务..."
 fi
 
 # low/medium → 直接 Sonnet
-claude --model sonnet -p "执行任务..."
+opencli claude --permission-mode bypassPermissions --model sonnet -p "执行任务..."
 ```
 
 # 公司 skills（有配置则加载）
@@ -222,7 +222,7 @@ Jest + Playwright (Chrome MCP)
          |
   全部通过 + 覆盖率 ≥ 80%?
    / \
- yes   no → 报告失败 → 编排器决定是否回退 Step 2
+ yes   no → 进入 Step 4.5 自动修复一轮 → 仍失败才终止
   |
  PASS
 ```

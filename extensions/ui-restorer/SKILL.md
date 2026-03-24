@@ -125,7 +125,7 @@ Antigravity 提交代码后，分两步审查：
 ### 审查 A：Claude Code 代码质量审查
 
 ```bash
-claude --model sonnet --print "
+opencli claude --permission-mode bypassPermissions --model sonnet --print "
   审查 Antigravity 生成的 UI 代码。
   
   变更文件: $(git diff --name-only HEAD~1..HEAD)
