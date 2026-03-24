@@ -10,7 +10,7 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "🤖 AI数字员工24小时可编排工作流 v3 — 初始化: $PROJECT_ROOT"
 echo "=================================================="
 
-mkdir -p "$PROJECT_ROOT/.claude"/{skills,extensions,orchestrator,logs}
+mkdir -p "$PROJECT_ROOT/.claude"/{skills,extensions,orchestrator,commands,logs}
 mkdir -p "$PROJECT_ROOT/specs/archive"
 
 echo "🧠 安装 4 个核心 skill..."
@@ -30,6 +30,12 @@ cp -r "$SRC/orchestrator/"* "$PROJECT_ROOT/.claude/orchestrator/"
 cp "$SRC/orchestrator/assets/hooks.json" "$PROJECT_ROOT/.claude/hooks.json" 2>/dev/null || true
 chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/"*.sh 2>/dev/null || true
 chmod +x "$PROJECT_ROOT/.claude/extensions/"*/scripts/*.sh 2>/dev/null || true
+
+echo "⌨️  安装 slash commands..."
+for c in start-workflow hotfix review test status; do
+  cp "$SRC/commands/$c.md" "$PROJECT_ROOT/.claude/commands/"
+  echo "  ✅ $c"
+done
 
 echo "📚 检查知识库文件..."
 for f in CLAUDE.md ARCHITECTURE.md SECURITY.md CODING_GUIDELINES.md; do
@@ -99,5 +105,5 @@ echo ""
 echo "  下一步："
 echo "    1. 编辑 .claude/*.md 填入项目信息"
 echo "    2. cp .env.ai-digital-workflow .env && vim .env"
-echo "    3. 测试: claude '/start-workflow 添加用户登录'"
+echo "    3. 测试: claude -p '/start-workflow 添加用户登录'"
 echo "=================================================="
