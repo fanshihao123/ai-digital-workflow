@@ -23,8 +23,8 @@ SKIPPED=0
 
 echo "🧹 清理 ${FEATURE_NAME} 相关的 worktree"
 
-# 列出所有匹配的 worktree
-git worktree list --porcelain | grep -B2 "$FEATURE_NAME" | grep "^worktree " | sed 's/^worktree //' | while read -r WORKTREE_PATH; do
+# 列出所有匹配的 worktree（精确匹配，避免 auth 匹配到 auth-api）
+git worktree list --porcelain | grep -B2 "/worktree/${FEATURE_NAME}/" | grep "^worktree " | sed 's/^worktree //' | while read -r WORKTREE_PATH; do
   # 获取分支名
   BRANCH=$(cd "$WORKTREE_PATH" 2>/dev/null && git branch --show-current 2>/dev/null || echo "unknown")
 

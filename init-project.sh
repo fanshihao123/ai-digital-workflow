@@ -1,6 +1,6 @@
 #!/bin/bash
 # AI数字员工24小时可编排工作流 v3 — 项目初始化
-# 4 核心 skill + 4 可插拔扩展
+# 4 核心 skill + 5 可插拔扩展
 # 用法: bash init-project.sh /path/to/your/project
 
 set -euo pipefail
@@ -15,20 +15,35 @@ mkdir -p "$PROJECT_ROOT/specs/archive"
 
 echo "🧠 安装 4 个核心 skill..."
 for s in spec-writer code-reviewer test-runner doc-syncer; do
-  cp -r "$SRC/skills/$s" "$PROJECT_ROOT/.claude/skills/"
+  cp -r "$SRC/skills/$s" "$PROJECT_ROOT/.claude/skills/" || {
+    echo "  ❌ 无法安装 $s"
+    exit 1
+  }
   echo "  ✅ $s"
 done
 
 echo "🔌 安装 5 个可插拔扩展..."
 for e in worktree-parallel deploy-executor jira-sync human-gate ui-restorer; do
-  cp -r "$SRC/extensions/$e" "$PROJECT_ROOT/.claude/extensions/"
+  cp -r "$SRC/extensions/$e" "$PROJECT_ROOT/.claude/extensions/" || {
+    echo "  ❌ 无法安装 $e"
+    exit 1
+  }
   echo "  ✅ $e"
 done
 
 echo "⚙️  安装编排器..."
-cp -r "$SRC/orchestrator/"* "$PROJECT_ROOT/.claude/orchestrator/"
+cp -r "$SRC/orchestrator/"* "$PROJECT_ROOT/.claude/orchestrator/" || {
+  echo "  ❌ 无法安装编排器"
+  exit 1
+}
+# 确保 lib 目录也被拷贝
+if [ -d "$SRC/orchestrator/scripts/lib" ]; then
+  mkdir -p "$PROJECT_ROOT/.claude/orchestrator/scripts/lib"
+  cp -r "$SRC/orchestrator/scripts/lib/"* "$PROJECT_ROOT/.claude/orchestrator/scripts/lib/"
+fi
 cp "$SRC/orchestrator/assets/hooks.json" "$PROJECT_ROOT/.claude/hooks.json" 2>/dev/null || true
 chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/"*.sh 2>/dev/null || true
+chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/lib/"*.sh 2>/dev/null || true
 chmod +x "$PROJECT_ROOT/.claude/extensions/"*/scripts/*.sh 2>/dev/null || true
 
 echo "⌨️  安装 slash commands..."

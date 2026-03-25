@@ -10,6 +10,19 @@ PROJECT_ROOT=$(git rev-parse --show-toplevel)
 BASE_BRANCH=$(git branch --show-current)
 LOG_FILE="$PROJECT_ROOT/specs/${FEATURE_NAME}/.workflow-log"
 
+# 加载公共函数库（如果存在）
+COMMON_SH="$PROJECT_ROOT/.claude/orchestrator/scripts/lib/common.sh"
+if [ -f "$COMMON_SH" ]; then
+  source "$COMMON_SH"
+  validate_feature_name "$FEATURE_NAME" || exit 1
+fi
+
+# 验证 assignment JSON 格式
+if ! jq empty "$ASSIGNMENT_FILE" 2>/dev/null; then
+  echo "❌ 无效的 JSON 文件: $ASSIGNMENT_FILE"
+  exit 1
+fi
+
 mkdir -p "$PROJECT_ROOT/specs/${FEATURE_NAME}"
 echo "[$(date +%H:%M:%S)] MULTI_AGENT_START: $FEATURE_NAME (base: $BASE_BRANCH)" >> "$LOG_FILE"
 
@@ -18,16 +31,22 @@ echo "[$(date +%H:%M:%S)] MULTI_AGENT_START: $FEATURE_NAME (base: $BASE_BRANCH)"
 # ------------------------------------------
 echo "🌳 创建 worktree 环境..."
 
-AGENT_COUNT=$(jq '.agents | length' "$ASSIGNMENT_FILE")
+AGENT_COUNT=$(jq '.agents | length' "$ASSIGNMENT_FILE") || { echo "❌ 无法读取 agents 数组"; exit 1; }
 PIDS=()
 
 for i in $(seq 0 $((AGENT_COUNT - 1))); do
-  AGENT_ID=$(jq -r ".agents[$i].id" "$ASSIGNMENT_FILE")
+  AGENT_ID=$(jq -r ".agents[$i].id" "$ASSIGNMENT_FILE") || { echo "❌ 无法解析 agent[$i].id"; exit 1; }
   ROLE=$(jq -r ".agents[$i].role" "$ASSIGNMENT_FILE")
   BRANCH=$(jq -r ".agents[$i].branch" "$ASSIGNMENT_FILE")
   WORKTREE_DIR=$(jq -r ".agents[$i].worktree" "$ASSIGNMENT_FILE")
   TASKS=$(jq -r ".agents[$i].tasks | join(\", \")" "$ASSIGNMENT_FILE")
   FILE_SCOPE=$(jq -r ".agents[$i].file_scope | join(\", \")" "$ASSIGNMENT_FILE")
+
+  # 验证分支名安全性
+  if [ -f "$COMMON_SH" ] && ! validate_branch_name "$BRANCH"; then
+    echo "  ❌ 跳过 agent $AGENT_ID: 非法分支名 $BRANCH"
+    continue
+  fi
 
   # 创建 worktree（如果不存在）
   if [ ! -d "$PROJECT_ROOT/$WORKTREE_DIR" ]; then
@@ -117,10 +136,11 @@ for GROUP in $GROUPS; do
         ;;
     esac
 
-    # 记录 PID
+    # 记录 PID（使用唯一临时文件避免竞态）
     GROUP_PIDS+=($PID)
+    TEMP_FILE=$(mktemp)
     jq "(.agents[] | select(.id==\"$AGENT_ID\") | .pid) = $PID | (.agents[] | select(.id==\"$AGENT_ID\") | .status) = \"running\"" \
-      "$ASSIGNMENT_FILE" > /tmp/assign_update.tmp && mv /tmp/assign_update.tmp "$ASSIGNMENT_FILE"
+      "$ASSIGNMENT_FILE" > "$TEMP_FILE" && mv "$TEMP_FILE" "$ASSIGNMENT_FILE"
 
     echo "  ✅ $AGENT_ID 已启动 (PID: $PID)"
     echo "[$(date +%H:%M:%S)] AGENT_STARTED: $AGENT_ID (PID: $PID)" >> "$LOG_FILE"

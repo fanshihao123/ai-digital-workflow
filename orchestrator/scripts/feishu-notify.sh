@@ -6,52 +6,23 @@ set -euo pipefail
 
 NOTIFICATION="${1:-}"
 
+# 加载公共函数库
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+
 # Load env
-PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-[ -f "$PROJECT_ROOT/.env" ] && source "$PROJECT_ROOT/.env"
+PROJECT_ROOT=$(get_project_root)
+load_env "$PROJECT_ROOT"
 
 # Skip if no webhook URL configured
 if [ -z "${FEISHU_WEBHOOK_URL:-}" ]; then
   exit 0
 fi
 
-# Determine notification type and color
-TEMPLATE="blue"
-if echo "$NOTIFICATION" | grep -qi "error\|fail\|blocked"; then
-  TEMPLATE="red"
-elif echo "$NOTIFICATION" | grep -qi "complete\|pass\|success"; then
-  TEMPLATE="green"
-elif echo "$NOTIFICATION" | grep -qi "warning\|retry"; then
-  TEMPLATE="orange"
-fi
-
 # Detect active feature
-ACTIVE_FEATURE=$(ls -t specs/*/tasks.md 2>/dev/null | head -1 | sed 's|specs/||;s|/tasks.md||' || echo "unknown")
+ACTIVE_FEATURE=$(ls -t "$PROJECT_ROOT"/specs/*/tasks.md 2>/dev/null | head -1 | sed "s|$PROJECT_ROOT/specs/||;s|/tasks.md||" || echo "unknown")
 
-# Send to Feishu
-curl -s -X POST "$FEISHU_WEBHOOK_URL" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"msg_type\": \"interactive\",
-    \"card\": {
-      \"header\": {
-        \"title\": {\"tag\": \"plain_text\", \"content\": \"🤖 AI Workforce: $ACTIVE_FEATURE\"},
-        \"template\": \"$TEMPLATE\"
-      },
-      \"elements\": [
-        {
-          \"tag\": \"markdown\",
-          \"content\": \"$NOTIFICATION\"
-        },
-        {
-          \"tag\": \"note\",
-          \"elements\": [{
-            \"tag\": \"plain_text\",
-            \"content\": \"$(date '+%Y-%m-%d %H:%M:%S') | Agent: Claude Code\"
-          }]
-        }
-      ]
-    }
-  }" > /dev/null 2>&1 || true
+# 使用 common.sh 中的安全通知函数
+feishu_notify "$NOTIFICATION" "$ACTIVE_FEATURE"
 
 exit 0

@@ -93,11 +93,13 @@ if [ -d "$SKILLS_CACHE" ]; then
   echo ""
   echo "  📋 可用的公司 skills："
 
-  SKILL_COUNT=0
   SKILL_INDEX="$SKILLS_CACHE/.skill-index.json"
-  echo "[" > "$SKILL_INDEX"
 
-  find "$SKILLS_CACHE" -name "SKILL.md" -type f | sort | while read -r skill_file; do
+  # 用 jq 安全构建 JSON 索引
+  echo "[]" > "$SKILL_INDEX"
+
+  # 使用 process substitution 避免管道子 shell 变量作用域问题
+  while IFS= read -r skill_file; do
     SKILL_DIR=$(dirname "$skill_file")
     SKILL_NAME=$(basename "$SKILL_DIR")
 
@@ -110,20 +112,14 @@ if [ -d "$SKILLS_CACHE" ]; then
 
     echo "    - $NAME: ${DESC:0:60}..."
 
-    # 写入索引
-    if [ $SKILL_COUNT -gt 0 ]; then echo "," >> "$SKILL_INDEX"; fi
-    cat >> "$SKILL_INDEX" << EOF
-  {
-    "name": "$NAME",
-    "dir": "$SKILL_DIR",
-    "description": "${DESC:0:200}",
-    "path": "$skill_file"
-  }
-EOF
-    SKILL_COUNT=$((SKILL_COUNT + 1))
-  done
-
-  echo "]" >> "$SKILL_INDEX"
+    # 用 jq 安全追加到索引（避免 JSON 注入）
+    jq --arg name "$NAME" \
+       --arg dir "$SKILL_DIR" \
+       --arg desc "${DESC:0:200}" \
+       --arg path "$skill_file" \
+       '. += [{name: $name, dir: $dir, description: $desc, path: $path}]' \
+       "$SKILL_INDEX" > "${SKILL_INDEX}.tmp" && mv "${SKILL_INDEX}.tmp" "$SKILL_INDEX"
+  done < <(find "$SKILLS_CACHE" -name "SKILL.md" -type f | sort)
 
   TOTAL=$(find "$SKILLS_CACHE" -name "SKILL.md" -type f | wc -l)
   echo ""

@@ -16,8 +16,8 @@ TASKS_FILE="$FEATURE_DIR/tasks.md"
 
 # Count task statuses
 TOTAL=$(grep -c "^### Task" "$TASKS_FILE" 2>/dev/null || echo 0)
-DONE=$(grep -c "Status.*done" "$TASKS_FILE" 2>/dev/null || echo 0)
-FAILED=$(grep -c "Status.*failed" "$TASKS_FILE" 2>/dev/null || echo 0)
+DONE=$(grep -cE "状态[：:].*done|Status.*done" "$TASKS_FILE" 2>/dev/null || echo 0)
+FAILED=$(grep -cE "状态[：:].*failed|Status.*failed" "$TASKS_FILE" 2>/dev/null || echo 0)
 
 # Determine overall status
 if [ "$DONE" -eq "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then

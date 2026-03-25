@@ -29,7 +29,7 @@ echo "[$(date +%H:%M:%S)] ROLLBACK_START: $FEATURE_NAME → $ROLLBACK_COMMIT" >>
 if [ -n "${COMMIT_COUNT:-}" ]; then
   git revert --no-commit HEAD~${COMMIT_COUNT}..HEAD
 else
-  git revert --no-commit HEAD..${ROLLBACK_COMMIT}
+  git revert --no-commit ${ROLLBACK_COMMIT}..HEAD
 fi
 
 git commit -m "rollback(${FEATURE_NAME}): 回滚部署
