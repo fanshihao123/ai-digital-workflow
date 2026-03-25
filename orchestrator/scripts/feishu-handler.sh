@@ -154,7 +154,11 @@ extract_feature_tests() {
       while IFS= read -r matched; do
         [ -n "$matched" ] && files+=("$matched")
       done < <(
-        rg --files "$project_relative" 2>/dev/null | rg "(^|/)${scope_base}\\.(test|spec)\\.(ts|tsx|js|jsx)$" || true
+        if command -v rg >/dev/null 2>&1; then
+          rg --files "$project_relative" 2>/dev/null | rg "(^|/)${scope_base}\\.(test|spec)\\.(ts|tsx|js|jsx)$" || true
+        else
+          find "$project_relative" -type f 2>/dev/null | grep -E "(^|/)${scope_base}\\.(test|spec)\\.(ts|tsx|js|jsx)$" || true
+        fi
       )
     fi
   done
@@ -623,7 +627,7 @@ step1_spec_writer() {
   # Stage 1: Claude 生成初稿
   echo "  [Stage 1] Claude 生成初稿..." >&2
   model=$(select_model "low")
-  opencli claude --permission-mode bypassPermissions --model "$model" -p "
+  opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
     Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
     Read $PROJECT_ROOT/.claude/CLAUDE.md
     Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
@@ -691,7 +695,7 @@ step1_spec_writer() {
   echo "  [Stage 3] Claude 复审 + 定稿..." >&2
   if [ -f "$PROJECT_ROOT/specs/$feature_name/spec-review.md" ]; then
     model=$(select_model "$complexity")
-    opencli claude --permission-mode bypassPermissions --model "$model" -p "
+    opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
       Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
       Read $PROJECT_ROOT/specs/$feature_name/spec-review.md
       Read $PROJECT_ROOT/specs/$feature_name/requirements.md
@@ -785,7 +789,7 @@ step2_sequential() {
   if [ "$has_antigravity" -gt 0 ] && [ "${ENABLE_UI_RESTORER:-false}" = "true" ]; then
     echo "  [ui-restorer] 检测到 $has_antigravity 个 antigravity 任务"
     # 先执行 antigravity 任务（UI 还原）
-    opencli claude --permission-mode bypassPermissions --model "$model" -p "
+    opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
       Read $PROJECT_ROOT/.claude/extensions/ui-restorer/SKILL.md
       Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
       Read $tasks_file
@@ -804,7 +808,7 @@ step2_sequential() {
       echo "  ⚠️ 发现 antigravity 任务但 ENABLE_UI_RESTORER 未启用，使用 Claude Code 执行"
     fi
     # 正常 Claude Code 顺序执行
-    opencli claude --permission-mode bypassPermissions --model "$model" -p "
+    opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
       Read $tasks_file
       Read $PROJECT_ROOT/.claude/CLAUDE.md
       Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
@@ -915,7 +919,7 @@ step4_fix_and_retry() {
     return 1
   fi
 
-  opencli claude --permission-mode bypassPermissions --model sonnet -p "
+  opencli claude --print --permission-mode bypassPermissions --model sonnet -p "
     Read $PROJECT_ROOT/.claude/skills/test-runner/SKILL.md
     Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
     Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
@@ -982,7 +986,7 @@ step6_deploy() {
     echo "  [deploy-executor] 执行部署..."
     notify "🚀 开始部署: $feature_name"
 
-    opencli claude --permission-mode bypassPermissions --model sonnet -p "
+    opencli claude --print --permission-mode bypassPermissions --model sonnet -p "
       Read $PROJECT_ROOT/.claude/extensions/deploy-executor/SKILL.md
 
       Execute deploy-executor for feature '$feature_name':
@@ -1158,7 +1162,7 @@ cmd_rollback() {
     bash "$PROJECT_ROOT/.claude/extensions/deploy-executor/scripts/rollback.sh" "$feature_name"
   else
     # 使用 git revert 作为默认回滚方式
-    opencli claude --permission-mode bypassPermissions --model sonnet -p "
+    opencli claude --print --permission-mode bypassPermissions --model sonnet -p "
       Read $PROJECT_ROOT/.claude/extensions/deploy-executor/SKILL.md
       Rollback feature '$feature_name': git revert the relevant commits and push.
     "
@@ -1195,7 +1199,7 @@ if [[ "$MSG_TEXT" == /* ]]; then
         step3_review "$FEATURE"
       else
         MODEL=$(select_model "low")
-        opencli claude --permission-mode bypassPermissions --model "$MODEL" -p "
+        opencli claude --print --permission-mode bypassPermissions --model "$MODEL" -p "
           Read $PROJECT_ROOT/.claude/skills/code-reviewer/SKILL.md
           Read $PROJECT_ROOT/.claude/SECURITY.md
           Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
@@ -1209,7 +1213,7 @@ if [[ "$MSG_TEXT" == /* ]]; then
       if [ -n "$FEATURE" ]; then
         step4_test "$FEATURE"
       else
-        opencli claude --permission-mode bypassPermissions --model sonnet -p "
+        opencli claude --print --permission-mode bypassPermissions --model sonnet -p "
           Read $PROJECT_ROOT/.claude/skills/test-runner/SKILL.md
           Run all tests and generate report.
         "
