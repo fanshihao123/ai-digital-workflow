@@ -197,20 +197,20 @@ extract_feature_tests() {
 }
 
 run_local_review() {
-  local feature_name=”$1”
-  local spec_dir=”$PROJECT_ROOT/specs/$feature_name”
-  local review_report=”$spec_dir/review-report.md”
+  local feature_name="$1"
+  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  local review_report="$spec_dir/review-report.md"
   local default_branch
-  default_branch=$(get_default_branch “$PROJECT_ROOT”)
+  default_branch=$(get_default_branch "$PROJECT_ROOT")
 
   # 获取变更 diff
   local changed_files
-  changed_files=$(git -C “$PROJECT_ROOT” diff --name-only “${default_branch}..HEAD” 2>/dev/null || echo “”)
+  changed_files=$(git -C "$PROJECT_ROOT" diff --name-only "${default_branch}..HEAD" 2>/dev/null || echo "")
   local diff_content
-  diff_content=$(git -C “$PROJECT_ROOT” diff “${default_branch}..HEAD” 2>/dev/null || echo “”)
+  diff_content=$(git -C "$PROJECT_ROOT" diff "${default_branch}..HEAD" 2>/dev/null || echo "")
 
   # 调用 Claude Code 执行真正的两轮代码审查
-  opencli claude --model sonnet --print --permission-mode bypassPermissions -p “
+  opencli claude --model sonnet --print --permission-mode bypassPermissions -p "
     Read $PROJECT_ROOT/.claude/skills/code-reviewer/SKILL.md
     Read $PROJECT_ROOT/.claude/skills/code-reviewer/references/review-checklist.md
     Read $PROJECT_ROOT/.claude/SECURITY.md
@@ -230,9 +230,9 @@ run_local_review() {
     - ROUND_1_STATUS: PASS|FAIL
     - ROUND_2_STATUS: PASS|FAIL
     - FINAL_VERDICT: PASS|FAIL
-  “ 2>&1 || {
+  " 2>&1 || {
     # fallback: 生成基础报告
-    cat > “$review_report” <<EOF
+    cat > "$review_report" <<EOF
 # 审查报告：$feature_name
 
 > 时间：$(date '+%Y-%m-%d %H:%M')
@@ -253,17 +253,17 @@ EOF
   }
 
   # 检查报告格式
-  if [ ! -f “$review_report” ]; then
+  if [ ! -f "$review_report" ]; then
     return 1
   fi
 
-  if ! grep -q “^## Round 1” “$review_report” 2>/dev/null || ! grep -q “^## Round 2” “$review_report” 2>/dev/null; then
+  if ! grep -q "^## Round 1" "$review_report" 2>/dev/null || ! grep -q "^## Round 2" "$review_report" 2>/dev/null; then
     return 1
   fi
 
   local final_verdict
-  final_verdict=$(sed -n 's/^FINAL_VERDICT:[[:space:]]*//p' “$review_report” | tail -1 | tr -d '\r')
-  [ “$final_verdict” = “PASS” ]
+  final_verdict=$(sed -n 's/^FINAL_VERDICT:[[:space:]]*//p' "$review_report" | tail -1 | tr -d '\r')
+  [ "$final_verdict" = "PASS" ]
 }
 
 run_local_test() {
