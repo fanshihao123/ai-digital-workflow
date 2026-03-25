@@ -10,6 +10,16 @@ ASSIGNMENT_FILE="${3:?}"
 PROJECT_ROOT=$(git rev-parse --show-toplevel)
 LOG_FILE="$PROJECT_ROOT/specs/${FEATURE_NAME}/.workflow-log"
 
+# 验证输入
+if [ -z "$AGENT_IDS" ]; then
+  echo "⚠️ 未提供 agent 列表"
+  exit 1
+fi
+if ! jq empty "$ASSIGNMENT_FILE" 2>/dev/null; then
+  echo "❌ 无效的 JSON 文件: $ASSIGNMENT_FILE"
+  exit 1
+fi
+
 cd "$PROJECT_ROOT"
 
 echo "🔀 开始合并 worktree 分支"
@@ -21,7 +31,7 @@ FAILED=0
 for AGENT_ID in "${AGENTS[@]}"; do
   [ -z "$AGENT_ID" ] && continue
 
-  BRANCH=$(jq -r ".agents[] | select(.id==\"$AGENT_ID\") | .branch" "$ASSIGNMENT_FILE")
+  BRANCH=$(jq -r --arg id "$AGENT_ID" '.agents[] | select(.id==$id) | .branch' "$ASSIGNMENT_FILE")
 
   if [ -z "$BRANCH" ] || [ "$BRANCH" = "null" ]; then
     echo "  ⚠️  $AGENT_ID: 未找到分支信息，跳过"

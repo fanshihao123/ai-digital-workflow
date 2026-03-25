@@ -29,12 +29,11 @@ done
 # Step 1: 获取 tenant_access_token
 # ------------------------------------------
 get_token() {
-  curl -s -X POST "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal" \
+  curl -s --max-time 10 --connect-timeout 5 -X POST "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal" \
     -H "Content-Type: application/json" \
-    -d "{
-      \"app_id\": \"$FEISHU_APP_ID\",
-      \"app_secret\": \"$FEISHU_APP_SECRET\"
-    }" | jq -r '.tenant_access_token'
+    -d "$(jq -n --arg id "$FEISHU_APP_ID" --arg secret "$FEISHU_APP_SECRET" \
+      '{app_id: $id, app_secret: $secret}')" \
+    | jq -r '.tenant_access_token'
 }
 
 TOKEN=$(get_token)
@@ -47,59 +46,75 @@ collect_form_data() {
   local feature="$2"
   local summary="$3"
 
+  # 获取默认分支（不硬编码 main）
+  local default_branch
+  default_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||' || echo "main")
+
   # 公共字段
-  CHANGED_FILES=$(git diff --name-only main..HEAD 2>/dev/null | head -20 | tr '\n' ', ' || echo "unknown")
-  COMMIT_COUNT=$(git rev-list --count main..HEAD 2>/dev/null || echo "0")
+  local changed_files commit_count
+  changed_files=$(git diff --name-only "${default_branch}..HEAD" 2>/dev/null | head -20 | tr '\n' ', ' || echo "unknown")
+  commit_count=$(git rev-list --count "${default_branch}..HEAD" 2>/dev/null || echo "0")
 
   case "$gate" in
     security)
       # 安全门控特有字段
-      RISK="medium"
-      SECURITY_FILES=$(git diff --name-only main..HEAD 2>/dev/null | \
+      local security_files sec_findings
+      security_files=$(git diff --name-only "${default_branch}..HEAD" 2>/dev/null | \
         grep -iE "(auth|security|crypto|cors|csrf|\.env|Dockerfile|nginx)" | \
         tr '\n' ', ' || echo "none")
 
-      REVIEW_REPORT="$PROJECT_ROOT/specs/${feature}/review-report.md"
-      SEC_FINDINGS="无"
-      if [ -f "$REVIEW_REPORT" ]; then
-        SEC_FINDINGS=$(grep -i "SEC-" "$REVIEW_REPORT" | head -5 || echo "无")
+      sec_findings="无"
+      if [ -f "$PROJECT_ROOT/specs/${feature}/review-report.md" ]; then
+        sec_findings=$(grep -i "SEC-" "$PROJECT_ROOT/specs/${feature}/review-report.md" | head -5 || echo "无")
       fi
 
-      cat << EOF
-[
-  {"id":"gate_type","type":"input","value":"🔒 安全相关代码变更"},
-  {"id":"feature","type":"input","value":"$feature"},
-  {"id":"summary","type":"textarea","value":"$summary"},
-  {"id":"risk","type":"input","value":"$RISK"},
-  {"id":"files","type":"textarea","value":"安全敏感文件: $SECURITY_FILES\n全部变更: $CHANGED_FILES"},
-  {"id":"review_verdict","type":"input","value":"PASS (待安全确认)"}
-]
-EOF
+      # 用 jq 安全构建 JSON
+      jq -n \
+        --arg feature "$feature" \
+        --arg summary "$summary" \
+        --arg sec_files "$security_files" \
+        --arg all_files "$changed_files" \
+        --arg findings "$sec_findings" \
+        '[
+          {id:"gate_type", type:"input", value:"🔒 安全相关代码变更"},
+          {id:"feature", type:"input", value:$feature},
+          {id:"summary", type:"textarea", value:$summary},
+          {id:"risk", type:"input", value:"medium"},
+          {id:"files", type:"textarea", value:("安全敏感文件: " + $sec_files + "\n全部变更: " + $all_files)},
+          {id:"review_verdict", type:"input", value:"PASS (待安全确认)"}
+        ]'
       ;;
 
     deploy)
       # 部署门控特有字段
-      TEST_REPORT="$PROJECT_ROOT/specs/${feature}/test-report.md"
-      COVERAGE="unknown"
-      if [ -f "$TEST_REPORT" ]; then
-        COVERAGE=$(grep -oP 'Statements.*?(\d+)%' "$TEST_REPORT" | grep -oP '\d+%' | head -1 || echo "unknown")
+      local coverage commits rollback
+      coverage="unknown"
+      if [ -f "$PROJECT_ROOT/specs/${feature}/test-report.md" ]; then
+        coverage=$(grep -oP 'Statements.*?(\d+)%' "$PROJECT_ROOT/specs/${feature}/test-report.md" | grep -oP '\d+%' | head -1 || echo "unknown")
       fi
 
-      COMMITS=$(git log --oneline main..HEAD 2>/dev/null | head -10 || echo "none")
-      ROLLBACK="git revert --no-commit HEAD~${COMMIT_COUNT}..HEAD && git commit -m 'rollback: ${feature}'"
+      commits=$(git log --oneline "${default_branch}..HEAD" 2>/dev/null | head -10 || echo "none")
+      rollback="git revert --no-commit HEAD~${commit_count}..HEAD && git commit -m 'rollback: ${feature}'"
 
-      cat << EOF
-[
-  {"id":"gate_type","type":"input","value":"🚀 生产环境部署"},
-  {"id":"feature","type":"input","value":"$feature"},
-  {"id":"summary","type":"textarea","value":"$summary\n\n提交记录:\n$COMMITS"},
-  {"id":"risk","type":"input","value":"${COMMIT_COUNT} 个提交"},
-  {"id":"files","type":"textarea","value":"$CHANGED_FILES"},
-  {"id":"review_verdict","type":"input","value":"PASS"},
-  {"id":"test_coverage","type":"input","value":"$COVERAGE"},
-  {"id":"rollback_plan","type":"textarea","value":"$ROLLBACK"}
-]
-EOF
+      # 用 jq 安全构建 JSON
+      jq -n \
+        --arg feature "$feature" \
+        --arg summary "$summary" \
+        --arg commits "$commits" \
+        --arg count "$commit_count" \
+        --arg files "$changed_files" \
+        --arg coverage "$coverage" \
+        --arg rollback "$rollback" \
+        '[
+          {id:"gate_type", type:"input", value:"🚀 生产环境部署"},
+          {id:"feature", type:"input", value:$feature},
+          {id:"summary", type:"textarea", value:($summary + "\n\n提交记录:\n" + $commits)},
+          {id:"risk", type:"input", value:($count + " 个提交")},
+          {id:"files", type:"textarea", value:$files},
+          {id:"review_verdict", type:"input", value:"PASS"},
+          {id:"test_coverage", type:"input", value:$coverage},
+          {id:"rollback_plan", type:"textarea", value:$rollback}
+        ]'
       ;;
   esac
 }
@@ -111,14 +126,15 @@ FORM_DATA=$(collect_form_data "$GATE_TYPE" "$FEATURE_NAME" "$SUMMARY")
 # ------------------------------------------
 echo "📋 创建飞书审批实例..."
 
-RESPONSE=$(curl -s -X POST "https://open.feishu.cn/open-apis/approval/v4/instances" \
+RESPONSE=$(curl -s --max-time 15 --connect-timeout 5 -X POST "https://open.feishu.cn/open-apis/approval/v4/instances" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d "{
-    \"approval_code\": \"$FEISHU_APPROVAL_CODE\",
-    \"open_id\": \"${FEISHU_APPROVER_ID:-}\",
-    \"form\": $(echo "$FORM_DATA" | jq -Rs .)
-  }")
+  -d "$(jq -n \
+    --arg code "$FEISHU_APPROVAL_CODE" \
+    --arg open_id "${FEISHU_APPROVER_ID:-}" \
+    --argjson form "$FORM_DATA" \
+    '{approval_code: $code, open_id: $open_id, form: ($form | tostring)}'
+  )")
 
 INSTANCE_ID=$(echo "$RESPONSE" | jq -r '.data.instance_code // empty')
 
@@ -152,7 +168,7 @@ while [ $ELAPSED -lt $TIMEOUT ]; do
     TOKEN=$(get_token)
   fi
 
-  STATUS=$(curl -s -X GET \
+  STATUS=$(curl -s --max-time 10 --connect-timeout 5 -X GET \
     "https://open.feishu.cn/open-apis/approval/v4/instances/${INSTANCE_ID}" \
     -H "Authorization: Bearer $TOKEN" | jq -r '.data.status // "UNKNOWN"')
 
@@ -166,7 +182,7 @@ while [ $ELAPSED -lt $TIMEOUT ]; do
       ;;
     REJECTED)
       echo "❌ 审批被拒绝"
-      REJECT_REASON=$(curl -s -X GET \
+      REJECT_REASON=$(curl -s --max-time 10 --connect-timeout 5 -X GET \
         "https://open.feishu.cn/open-apis/approval/v4/instances/${INSTANCE_ID}" \
         -H "Authorization: Bearer $TOKEN" | jq -r '.data.comment // "无"')
       echo "   拒绝原因: $REJECT_REASON"

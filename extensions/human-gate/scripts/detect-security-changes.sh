@@ -6,8 +6,13 @@
 set -euo pipefail
 
 FEATURE_NAME="${1:?用法: detect-security-changes.sh <feature-name> [base-branch]}"
-BASE_BRANCH="${2:-main}"
+BASE_BRANCH="${2:-}"
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+# 获取默认分支（不硬编码 main）
+if [ -z "$BASE_BRANCH" ]; then
+  BASE_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||' || echo "main")
+fi
 
 # 安全敏感路径模式
 SECURITY_PATTERNS=(
@@ -36,28 +41,32 @@ SECURITY_PATTERNS=(
   'utils/token'
 )
 
-# 安全敏感代码模式（在 diff 内容中检测）
+# 安全敏感代码模式（更精确，减少误报）
 SECURITY_CODE_PATTERNS=(
-  'password'
-  'secret'
-  'private.key'
-  'jwt\.sign'
-  'jwt\.verify'
-  'bcrypt'
-  'crypto\.'
-  'createCipher'
-  'createHash'
-  'cors('
-  'helmet('
-  'csrf'
-  'sanitize'
-  'escape'
-  'sql.*\${'
-  'eval('
-  'exec('
+  'password\s*='
+  'password\s*:'
+  'setPassword\('
+  'secret\s*='
+  'secret\s*:'
+  'SECRET_KEY'
+  'private\.key'
+  'jwt\.sign\('
+  'jwt\.verify\('
+  'bcrypt\.(hash|compare)'
+  'crypto\.create'
+  'createCipher\('
+  'createHash\('
+  'cors\(\{'
+  'helmet\(\{'
+  'csrf\('
+  'sanitize\('
+  'escape\('
+  'sql.*\$\{'
+  '\beval\('
+  '\bexec\('
   'dangerouslySetInnerHTML'
   'innerHTML\s*='
-  'document\.write'
+  'document\.write\('
 )
 
 CHANGED_FILES=$(git diff --name-only "${BASE_BRANCH}..HEAD" 2>/dev/null || echo "")
@@ -77,9 +86,14 @@ for pattern in "${SECURITY_PATTERNS[@]}"; do
   fi
 done
 
-# 检查 diff 中的安全敏感代码模式
+# 检查 diff 中的安全敏感代码模式（排除测试文件和注释）
 for pattern in "${SECURITY_CODE_PATTERNS[@]}"; do
-  if echo "$DIFF_CONTENT" | grep -qiE "^\+.*${pattern}"; then
+  # 只检查新增行（^\+），排除测试文件、注释行
+  MATCHES=$(echo "$DIFF_CONTENT" | grep -E "^\+.*${pattern}" | \
+    grep -v -E '(__tests__|\.test\.|\.spec\.|\.md$)' | \
+    grep -v -E '^\+\s*(//|#|\*|/\*)' || true)
+
+  if [ -n "$MATCHES" ]; then
     SECURITY_CODE="${SECURITY_CODE}  - 检测到: ${pattern}\n"
     TRIGGERED=true
   fi
