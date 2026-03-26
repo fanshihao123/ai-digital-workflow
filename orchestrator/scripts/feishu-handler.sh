@@ -125,6 +125,92 @@ has_reviewed_spec() {
   grep -q "状态：done\|状态：reviewed" "$spec_dir/tasks.md" 2>/dev/null || return 1
 }
 
+# ============================================================
+# 澄清机制：检测开放问题，暂停并等待用户确认
+# ============================================================
+
+# 从 requirements.md 的"开放问题"部分提取未勾选的 [ ] 项
+extract_open_questions() {
+  local feature_name="$1"
+  local req_file="$PROJECT_ROOT/specs/$feature_name/requirements.md"
+  [ -f "$req_file" ] || return 0
+  local in_section=false
+  while IFS= read -r line; do
+    if echo "$line" | grep -qiE "^#+[[:space:]]*(开放问题|open.question)"; then
+      in_section=true; continue
+    fi
+    if $in_section && echo "$line" | grep -qE "^#"; then
+      in_section=false; continue
+    fi
+    if $in_section && echo "$line" | grep -qE "^[[:space:]]*-[[:space:]]*\[[[:space:]]*\]"; then
+      echo "$line"
+    fi
+  done < "$req_file"
+}
+
+# 保存暂停等待状态到 specs/{feature}/awaiting-clarification.json
+save_clarification_state() {
+  local feature_name="$1"
+  local original_input="$2"
+  local questions_text="$3"
+  local state_file="$PROJECT_ROOT/specs/$feature_name/awaiting-clarification.json"
+  jq -n \
+    --arg feature "$feature_name" \
+    --arg input "$original_input" \
+    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg qs "$questions_text" \
+    '{feature:$feature,status:"awaiting",original_input:$input,timestamp:$ts,questions:$qs,answers:""}' \
+    > "$state_file"
+}
+
+# 检查是否有待确认的暂停状态
+has_pending_clarification() {
+  local feature_name="$1"
+  local state_file="$PROJECT_ROOT/specs/$feature_name/awaiting-clarification.json"
+  [ -f "$state_file" ] && jq -e '.status == "awaiting"' "$state_file" >/dev/null 2>&1
+}
+
+# 读取状态文件中的指定字段
+get_clarification_field() {
+  local feature_name="$1"
+  local field="$2"
+  local state_file="$PROJECT_ROOT/specs/$feature_name/awaiting-clarification.json"
+  [ -f "$state_file" ] && jq -r ".$field // empty" "$state_file" 2>/dev/null || true
+}
+
+# 将用户答复写入状态文件，并更新 status 为 answered
+mark_clarification_answered() {
+  local feature_name="$1"
+  local answers="$2"
+  local state_file="$PROJECT_ROOT/specs/$feature_name/awaiting-clarification.json"
+  if [ -f "$state_file" ]; then
+    local tmp; tmp=$(mktemp)
+    jq --arg ans "$answers" '.status="answered"|.answers=$ans' "$state_file" > "$tmp" && mv "$tmp" "$state_file"
+  fi
+}
+
+# 格式化开放问题并通过飞书发送给用户
+notify_open_questions() {
+  local feature_name="$1"
+  local questions_text="$2"
+  local q_count
+  q_count=$(echo "$questions_text" | grep -c "." 2>/dev/null || echo 0)
+  local msg="⏸️ Step 1 已暂停 — 需确认 ${q_count} 个问题后才能继续\n\n"
+  local idx=1
+  while IFS= read -r qline; do
+    [ -z "$qline" ] && continue
+    local q_text
+    q_text=$(echo "$qline" \
+      | sed 's/^[[:space:]]*-[[:space:]]*\[[[:space:]]*\][[:space:]]*//' \
+      | sed 's/\[INFERRED\][[:space:]]*//' \
+      | xargs)
+    msg+="${idx}. ${q_text}\n"
+    idx=$((idx + 1))
+  done <<< "$questions_text"
+  msg+="\n回复: \`/answer $feature_name 1.你的答案 2.你的答案\`"
+  notify "$msg" "$feature_name"
+}
+
 extract_feature_scopes() {
   local feature_name="$1"
   local tasks_file="$PROJECT_ROOT/specs/$feature_name/tasks.md"
@@ -672,6 +758,24 @@ step1_spec_writer() {
   # Jira 同步
   jira_sync "requirements-done" "$feature_name" >&2
 
+  # ── 开放问题检测：若有不确定项则暂停，等待用户澄清 ─────────────────────
+  if [ "$is_hotfix" = "false" ]; then
+    local open_questions_text
+    open_questions_text=$(extract_open_questions "$feature_name")
+    if [ -n "$open_questions_text" ]; then
+      local oq_count
+      oq_count=$(echo "$open_questions_text" | grep -c "." || echo 0)
+      echo "  [clarification] 检测到 $oq_count 个开放问题，暂停工作流" >&2
+      save_clarification_state "$feature_name" "$input" "$open_questions_text"
+      notify_open_questions "$feature_name" "$open_questions_text"
+      log "STEP_1_PAUSED: $feature_name ($oq_count 开放问题)" "$PROJECT_ROOT/specs/.workflow-log"
+      echo "  ⏸️ 等待用户答复: $feature_name" >&2
+      echo "__PAUSED__"
+      return 0
+    fi
+  fi
+  # ─────────────────────────────────────────────────────────────────────────
+
   # 只有 hotfix 或简单任务允许跳过完整 spec 审查
   local complexity
   complexity=$(get_complexity "$feature_name")
@@ -1095,44 +1199,24 @@ step7_notify() {
 }
 
 # ============================================================
-# 完整流水线（Step 0 → Step 7）
+# 流水线 Steps 2-7（开发 → 审查 → 测试 → 文档 → 部署 → 通知）
+# 独立提取，供完整流水线和澄清恢复流程共同调用
 # ============================================================
-run_full_pipeline() {
-  local input="$1"
-  local is_hotfix="${2:-false}"
+run_pipeline_steps_2_to_7() {
+  local feature_name="$1"
   local pipeline_log="$PROJECT_ROOT/specs/.workflow-log"
   local step_start
-
-  # Step 0
-  step_start=$(date +%s)
-  log "STEP_0_START: 环境准备" "$pipeline_log"
-  step0_prepare
-  log "STEP_0_DONE: $(($(date +%s) - step_start))s" "$pipeline_log"
-
-  # Step 1
-  step_start=$(date +%s)
-  log "STEP_1_START: spec-writer" "$pipeline_log"
-  local feature_name
-  feature_name=$(step1_spec_writer "$input" "$is_hotfix")
-  if [ -z "$feature_name" ]; then
-    echo "❌ 流水线终止：spec-writer 未产出"
-    notify "❌ 流水线终止: spec-writer 失败"
-    return 1
-  fi
-  log "STEP_1_DONE: $feature_name ($(($(date +%s) - step_start))s)" "$pipeline_log"
-
-  # 根据 design.md 的 complexity 选择标记 worktree 模式
   local complexity
   complexity=$(get_complexity "$feature_name")
   echo "  复杂度: $complexity"
 
-  # Step 2
+  # Step 2：开发执行（Agent 路由）
   step_start=$(date +%s)
   log "STEP_2_START: 开发执行 ($feature_name)" "$pipeline_log"
   step2_develop "$feature_name"
   log "STEP_2_DONE: $(($(date +%s) - step_start))s" "$pipeline_log"
 
-  # Step 3
+  # Step 3：code-reviewer（两轮审查）
   step_start=$(date +%s)
   log "STEP_3_START: 代码审查 ($feature_name)" "$pipeline_log"
   step3_review "$feature_name" || {
@@ -1142,7 +1226,7 @@ run_full_pipeline() {
   }
   log "STEP_3_DONE: $(($(date +%s) - step_start))s" "$pipeline_log"
 
-  # Step 4
+  # Step 4：test-runner（测试 + 覆盖率）
   step_start=$(date +%s)
   log "STEP_4_START: 测试 ($feature_name)" "$pipeline_log"
   step4_test "$feature_name" || {
@@ -1157,22 +1241,58 @@ run_full_pipeline() {
   }
   log "STEP_4_DONE: $(($(date +%s) - step_start))s" "$pipeline_log"
 
-  # Step 5
+  # Step 5：doc-syncer（文档同步 + 迭代归档）
   step_start=$(date +%s)
   log "STEP_5_START: 文档同步 ($feature_name)" "$pipeline_log"
   step5_doc_sync "$feature_name"
   log "STEP_5_DONE: $(($(date +%s) - step_start))s" "$pipeline_log"
 
-  # Step 6
+  # Step 6：部署（扩展 — 按需）
   step_start=$(date +%s)
   log "STEP_6_START: 部署 ($feature_name)" "$pipeline_log"
   step6_deploy "$feature_name"
   log "STEP_6_DONE: $(($(date +%s) - step_start))s" "$pipeline_log"
 
-  # Step 7
+  # Step 7：通知
   log "STEP_7_START: 通知 ($feature_name)" "$pipeline_log"
   step7_notify "$feature_name"
   log "PIPELINE_COMPLETE: $feature_name" "$pipeline_log"
+}
+
+# ============================================================
+# 完整流水线（Step 0 → Step 7）
+# ============================================================
+run_full_pipeline() {
+  local input="$1"
+  local is_hotfix="${2:-false}"
+  local pipeline_log="$PROJECT_ROOT/specs/.workflow-log"
+  local step_start
+
+  # Step 0：环境准备 + 知识加载
+  step_start=$(date +%s)
+  log "STEP_0_START: 环境准备" "$pipeline_log"
+  step0_prepare
+  log "STEP_0_DONE: $(($(date +%s) - step_start))s" "$pipeline_log"
+
+  # Step 1：spec-writer（三阶段交叉审查）
+  step_start=$(date +%s)
+  log "STEP_1_START: spec-writer" "$pipeline_log"
+  local feature_name
+  feature_name=$(step1_spec_writer "$input" "$is_hotfix")
+  if [ -z "$feature_name" ]; then
+    echo "❌ 流水线终止：spec-writer 未产出"
+    notify "❌ 流水线终止: spec-writer 失败"
+    return 1
+  fi
+  # 检测暂停状态（等待用户澄清开放问题）
+  if [ "$feature_name" = "__PAUSED__" ]; then
+    echo "⏸️ 流水线已暂停：等待用户答复开放问题"
+    log "PIPELINE_PAUSED: 等待用户澄清" "$pipeline_log"
+    return 0
+  fi
+  log "STEP_1_DONE: $feature_name ($(($(date +%s) - step_start))s)" "$pipeline_log"
+
+  run_pipeline_steps_2_to_7 "$feature_name"
 }
 
 # ============================================================
@@ -1227,6 +1347,120 @@ cmd_rollback() {
 }
 
 # ============================================================
+# /answer 命令：用户提供澄清答复，恢复暂停的工作流
+# ============================================================
+cmd_answer_clarification() {
+  local args="$1"
+  local feature_name
+  feature_name=$(echo "$args" | awk '{print $1}')
+  local answers
+  answers=$(echo "$args" | cut -d' ' -f2-)
+  [ "$answers" = "$feature_name" ] && answers=""
+
+  if [ -z "$feature_name" ]; then
+    echo "❌ 用法: /answer {需求名称} {你的答复}"
+    echo "   示例: /answer user-login-oauth 1.需要邮件验证 2.不需要手机号"
+    return 1
+  fi
+  if ! has_pending_clarification "$feature_name"; then
+    echo "❌ 未找到 '$feature_name' 的待确认问题（或已过期）"
+    echo "   提示: 用 /status 查看当前活跃需求"
+    return 1
+  fi
+  if [ -z "$answers" ]; then
+    echo "❌ 请提供答复内容"
+    echo "   示例: /answer $feature_name 1.需要邮件验证 2.不需要手机号"
+    return 1
+  fi
+
+  local original_input
+  original_input=$(get_clarification_field "$feature_name" "original_input")
+  mark_clarification_answered "$feature_name" "$answers"
+
+  notify "▶️ 收到澄清，重新生成 spec: $feature_name"
+  log "STEP_1_RESUME: $feature_name (用户提供澄清)" "$PROJECT_ROOT/specs/.workflow-log"
+
+  # 重新运行 Stage 1（融入用户澄清上下文）
+  local model
+  model=$(select_model "low")
+  opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
+    Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
+    Read $PROJECT_ROOT/.claude/CLAUDE.md
+    Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
+    Read $PROJECT_ROOT/.claude/SECURITY.md
+    Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
+    $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
+
+    用户已为开放问题提供澄清，请覆写 specs/$feature_name/ 下的三个文档：
+    原始需求: $original_input
+    用户澄清答复: $answers
+
+    要求：
+    - 已解答的开放问题从 [ ] 改为 [x]
+    - 根据澄清内容更新 requirements.md、design.md、tasks.md
+    - 仍有不确定的项保留 [ ]（不要强行推断）
+    Execute spec-writer Stage 1 with clarification context.
+  " >&2
+
+  # 清理状态文件（答复已消费）
+  rm -f "$PROJECT_ROOT/specs/$feature_name/awaiting-clarification.json"
+
+  # 再次检查是否仍有未解决的开放问题
+  local remaining_questions
+  remaining_questions=$(extract_open_questions "$feature_name")
+  if [ -n "$remaining_questions" ]; then
+    local rq_count
+    rq_count=$(echo "$remaining_questions" | grep -c "." || echo 0)
+    echo "  [clarification] 仍有 $rq_count 个未解决的开放问题，再次暂停" >&2
+    save_clarification_state "$feature_name" "$original_input" "$remaining_questions"
+    notify_open_questions "$feature_name" "$remaining_questions"
+    log "STEP_1_PAUSED: $feature_name ($rq_count 开放问题，第2轮)" "$PROJECT_ROOT/specs/.workflow-log"
+    return 0
+  fi
+
+  # 无剩余开放问题，继续 Stages 2+3，然后 Steps 2-7
+  notify "✅ 澄清完成，继续 Stage 2+3: $feature_name"
+
+  local complexity
+  complexity=$(get_complexity "$feature_name")
+  local task_count
+  task_count=$(grep -c "^### Task" "$PROJECT_ROOT/specs/$feature_name/tasks.md" 2>/dev/null || echo 0)
+
+  if [ "$task_count" -le 2 ] && [ "$complexity" = "low" ]; then
+    notify "🟡 Step 1 完成（澄清后，简单任务跳过 Codex）: $feature_name"
+  elif command -v codex &>/dev/null; then
+    # Stage 2: Codex 审查
+    echo "  [Stage 2] Codex 审查（澄清后）..." >&2
+    codex exec --full-auto "
+      审查 specs/$feature_name/ 下 requirements.md + design.md + tasks.md（13维度 R1-R4,D1-D4,T1-T5）
+      输出格式: DIMENSION/VERDICT/DETAIL/SUGGESTION，最后 OVERALL/CRITICAL_ISSUES
+    " > "$PROJECT_ROOT/specs/$feature_name/spec-review.md" 2>/dev/null || \
+      echo "  ⚠️ Codex 审查失败，跳过 Stage 2" >&2
+
+    # Stage 3: Claude 复审定稿
+    if [ -f "$PROJECT_ROOT/specs/$feature_name/spec-review.md" ]; then
+      echo "  [Stage 3] Claude 复审（澄清后）..." >&2
+      local stage3_model
+      stage3_model=$(select_model "$complexity")
+      opencli claude --print --permission-mode bypassPermissions --model "$stage3_model" -p "
+        Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
+        Read $PROJECT_ROOT/specs/$feature_name/spec-review.md
+        Read $PROJECT_ROOT/specs/$feature_name/requirements.md
+        Read $PROJECT_ROOT/specs/$feature_name/design.md
+        Read $PROJECT_ROOT/specs/$feature_name/tasks.md
+        Execute spec-writer Stage 3: 复审定稿，PASS 项不改，ISSUE 项按建议修改，更新文件状态为 reviewed。
+      " >&2
+    fi
+    notify "✅ Step 1 完成（澄清后）: $feature_name"
+  else
+    notify "✅ Step 1 完成（澄清后，codex 不可用跳过审查）: $feature_name"
+  fi
+
+  # 继续 Steps 2-7
+  run_pipeline_steps_2_to_7 "$feature_name"
+}
+
+# ============================================================
 # 命令路由
 # ============================================================
 if [[ "$MSG_TEXT" == /* ]]; then
@@ -1276,6 +1510,9 @@ if [[ "$MSG_TEXT" == /* ]]; then
     /rollback)
       cmd_rollback "$ARGS"
       ;;
+    /answer)
+      cmd_answer_clarification "$ARGS"
+      ;;
     /status)
       echo "=== Git Log ==="
       git -C "$PROJECT_ROOT" log --oneline -10
@@ -1292,7 +1529,7 @@ if [[ "$MSG_TEXT" == /* ]]; then
       ;;
     *)
       echo "Unknown command: $COMMAND"
-      echo "Available: /workflow /hotfix /review /test /deploy /rollback /status"
+      echo "Available: /workflow /hotfix /review /test /answer /deploy /rollback /status"
       ;;
   esac
 else
