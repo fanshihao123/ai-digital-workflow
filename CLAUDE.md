@@ -197,7 +197,7 @@ spec-writer 在生成文档时使用两级标记处理信息不足的情况：
 ```
 Round 1: Antigravity Thinking 模式 + 结构化设计规格提示词
     ↓ chrome-cdp-skill 截图（项目内置入口：`scripts/cdp.mjs`）
-    ↓ Antigravity Pro 模式视觉打分（1-10）+ 输出 DIFF_COMPLEXITY + FIXES
+    ↓ Codex 视觉打分（1-10）+ 输出 DIFF_COMPLEXITY + FIXES
 SCORE ≥ 8 → PASS
 SCORE < 8 → Round 2:
     minor diff → Antigravity Fast 模式微调
@@ -209,11 +209,11 @@ SCORE < 8 → 人工确认节点（agent_notify 发飞书附截图）
 
 **Antigravity 三种模式**
 
-| 模式 | 场景 | 参数 |
+| 模式 | 场景 | 当前落地方式 |
 |------|------|------|
-| Thinking | 生成代码 / major 修复 | `--model=antigravity-gemini-3-pro --variant=high` |
-| Pro | 截图视觉打分 | `--model=antigravity-gemini-3-pro` |
-| Fast | minor 微调（颜色/字号/间距） | `--model=antigravity-gemini-3-flash --variant=minimal` |
+| Thinking | 生成 UI 代码 / major 修复 | 优先 `Claude Opus 4.6 (Thinking)`，额度/不可用时顺延降级到 `Gemini 3.1 Pro (High)`，再降到 `Gemini 3 Flash` |
+| Codex 评分 | 截图视觉打分 | 用 `chrome-cdp-skill` 截图后交给 Codex 输出 `SCORE / DIFF_COMPLEXITY / FIXES / PASS` |
+| Fast | minor 微调（颜色/字号/间距） | 优先 `Gemini 3.1 Pro (High)`，不可用时降级到 `Gemini 3 Flash`，发送更短、更聚焦的 diff 修复提示词 |
 
 **Phase 2 — 人工确认汇报粒度**
 - 总块数 ≤ 3 → 全部完成后一次汇报
@@ -259,7 +259,7 @@ SCORE < 8 → 人工确认节点（agent_notify 发飞书附截图）
 - **显式两阶段 Step 2**：Step 2a（所有 antigravity 任务）先跑完，Step 2b（claude-code 任务）再跑，依赖关系明确
 - **dev server 生命周期管理**：`ensure_dev_server()` 自动检测端口、启动服务、健康等待、失败暂停
 - **分块还原策略**：Antigravity 连 Figma MCP 分析设计稿，自动决定分块，逐块还原
-- **视觉反馈闭环**：chrome-cdp-skill（项目内置入口：`scripts/cdp.mjs`）截图 → Antigravity Pro 模式打分 → FIXES → 定向重试，最多 2 轮
+- **视觉反馈闭环**：chrome-cdp-skill（项目内置入口：`scripts/cdp.mjs`）截图 → Codex 结构化打分 → FIXES → 定向重试，最多 2 轮
 - **三模式动态切换**：Thinking（生成/重构）/ Pro（视觉打分）/ Fast（minor 微调），由打分输出的 `DIFF_COMPLEXITY` 驱动
 - **分批人工确认**：≤3 块一次汇报，>3 块每 3 块汇报，agent_notify 附截图发飞书
 - **Codex 代码规范审查**：UI 还原完成后一轮审查（design token/a11y/Props 规范），ERROR 自动修复，WARNING 不阻塞

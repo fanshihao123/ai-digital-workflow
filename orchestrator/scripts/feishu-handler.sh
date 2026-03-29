@@ -1065,6 +1065,112 @@ extract_task_field() {
     | sed "s/^- ${field}:[[:space:]]*//"
 }
 
+# Antigravity CLI 兼容层（适配 opencli 1.3.x）
+# 说明：当前 opencli antigravity send 不支持 --model/--variant，且 send 只保证发出消息，
+# AI 回复需再通过 read 读取。因此这里统一做状态检查 + send + best-effort read。
+antigravity_is_page_scriptable() {
+  local status_output url
+  status_output=$(opencli antigravity status 2>/dev/null || true)
+  echo "$status_output" | grep -q "Connected" || return 1
+  url=$(echo "$status_output" | awk -F'│' '/Connected/ {gsub(/^ +| +$/, "", $3); print $3; exit}')
+  [ -n "$url" ] || return 1
+  case "$url" in
+    about:blank*|chrome://*|chrome-extension://*|https://chromewebstore.google.com/*|https://clients2.google.com/*)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+antigravity_switch_model() {
+  local mode="$1"
+  local candidates=()
+  case "$mode" in
+    thinking)
+      candidates=("Claude Opus 4.6 (Thinking)" "Gemini 3.1 Pro (High)" "Gemini 3 Flash" "claude" "gemini")
+      ;;
+    pro)
+      candidates=("Gemini 3.1 Pro (High)" "Gemini 3 Flash" "gemini")
+      ;;
+    fast)
+      candidates=("Gemini 3.1 Pro (High)" "Gemini 3 Flash" "gemini")
+      ;;
+    *)
+      candidates=("Gemini 3.1 Pro (High)" "Gemini 3 Flash" "gemini")
+      ;;
+  esac
+
+  local target
+  for target in "${candidates[@]}"; do
+    if opencli antigravity model "$target" >/dev/null 2>&1; then
+      echo "[antigravity] mode=$mode switched model=$target" >&2
+      return 0
+    fi
+  done
+
+  echo "[antigravity] mode=$mode failed to switch any candidate model" >&2
+  return 1
+}
+
+antigravity_send_message() {
+  local prompt="$1"
+  local mode="${2:-thinking}"
+  if ! antigravity_is_page_scriptable; then
+    echo "[antigravity] page not scriptable or bridge not ready" >&2
+    return 1
+  fi
+  antigravity_switch_model "$mode" || true
+  opencli antigravity send "$prompt" >/dev/null 2>&1
+}
+
+codex_score_ui() {
+  local figma_url="$1"
+  local block_name="$2"
+  local screenshot="$3"
+  local design_spec="$4"
+
+  if ! command -v codex >/dev/null 2>&1; then
+    cat <<'EOF'
+SCORE: 0
+DIFF_COMPLEXITY: major
+FIXES:
+  - Codex 未安装，无法执行视觉评分
+PASS: false
+EOF
+    return 0
+  fi
+
+  codex exec --full-auto "你现在是 UI 视觉评分器。请基于以下信息给出结构化评分：
+
+Figma 设计稿：$figma_url
+目标区域：$block_name
+当前渲染截图文件：$screenshot
+设计规格：
+$design_spec
+
+任务：评估当前截图相对设计稿/设计规格的还原质量。
+
+评估维度：
+1. 整体布局结构是否一致
+2. 间距/padding/margin 是否准确
+3. 颜色/字体/字号是否匹配
+4. 组件细节（圆角/阴影/边框）是否还原
+5. 响应式是否正确（如截图中可判断）
+
+严格按以下格式输出，不要有其他文字：
+SCORE: {1-10}
+DIFF_COMPLEXITY: minor|major
+FIXES:
+  - {元素.属性: 实际值 → 设计值}
+PASS: true|false" 2>/dev/null || cat <<'EOF'
+SCORE: 0
+DIFF_COMPLEXITY: major
+FIXES:
+  - Codex 视觉评分执行失败
+PASS: false
+EOF
+}
+
 # 执行单个 antigravity 任务的分块还原
 # 返回: 0=通过(包括人工确认) 1=失败
 step2a_restore_task() {
@@ -1133,21 +1239,9 @@ step2a_restore_task() {
     for round in 1 2; do
       echo "  [ui-restorer] Round $round..." >&2
 
-      # 选择生成模式
-      local gen_model gen_variant
-      if [ "$round" -eq 1 ] || [ "$diff_complexity" = "major" ]; then
-        gen_model="antigravity-gemini-3-pro"
-        gen_variant="high"
-      else
-        # Round 2 minor → Fast
-        gen_model="antigravity-gemini-3-flash"
-        gen_variant="minimal"
-      fi
-
-      # 调用 Antigravity 生成/修复
+      # 调用 Antigravity 生成/修复（opencli 1.3.x 不支持 --model/--variant）
       if [ "$round" -eq 1 ]; then
-        opencli antigravity send \
-          --model="$gen_model" --variant="$gen_variant" \
+        antigravity_send_message \
           "你只负责 UI 还原，不碰业务逻辑。
 
 页面：$task_name
@@ -1165,11 +1259,10 @@ $design_spec
 - Props 接口定义在组件顶部
 - 禁止：API 调用 / 状态管理 / 路由跳转 / 硬编码颜色 / 内联样式
 
-请生成 $block_name 的代码，写入 $file_path。" >/dev/null 2>&1 || true
+请生成 $block_name 的代码，写入 $file_path。" "thinking" || true
       else
         # Round 2：带精确 diff 修复
-        opencli antigravity send \
-          --model="$gen_model" --variant="$gen_variant" \
+        antigravity_send_message \
           "根据以下视觉 diff 精确修复 $file_path：
 
 $fixes
@@ -1177,7 +1270,7 @@ $fixes
 Figma 设计规格参考：
 $design_spec
 
-只修改与 diff 相关的代码，不要重写其他部分。" >/dev/null 2>&1 || true
+只修改与 diff 相关的代码，不要重写其他部分。" "$([ "$diff_complexity" = "major" ] && echo thinking || echo fast)" || true
       fi
 
       sleep 3  # 等待热更新
@@ -1188,32 +1281,9 @@ $design_spec
         node "$PROJECT_ROOT/scripts/cdp.mjs" shot "$cdp_target" "$screenshot" >/dev/null 2>&1 || true
       fi
 
-      # Antigravity Pro 模式视觉打分
+      # Codex 视觉打分（Antigravity 只负责生成/修复，不负责结构化回评）
       local score_output
-      score_output=$(opencli antigravity send \
-        --model="antigravity-gemini-3-pro" \
-        "请对比以下两张图，评估 UI 还原质量：
-
-图1（Figma 设计稿）：通过 Figma MCP 打开 $figma_url，查看 $block_name 区域
-图2（当前渲染截图）：[附图: $screenshot]
-
-评估维度：
-1. 整体布局结构是否一致
-2. 间距/padding/margin 是否准确
-3. 颜色/字体/字号是否匹配
-4. 组件细节（圆角/阴影/边框）是否还原
-5. 响应式是否正确
-
-严格按以下格式输出，不要有其他文字：
-SCORE: {1-10}
-DIFF_COMPLEXITY: minor|major
-FIXES:
-  - {元素.属性: 实际值 → 设计值}
-PASS: true|false" 2>/dev/null || echo "SCORE: 0
-DIFF_COMPLEXITY: major
-FIXES:
-  - 截图获取失败，跳过视觉打分
-PASS: false")
+      score_output=$(codex_score_ui "$figma_url" "$block_name" "$screenshot" "$design_spec")
 
       # 解析打分结果
       score=$(echo "$score_output" | grep "^SCORE:" | sed 's/SCORE:[[:space:]]*//' | tr -d ' \r')
@@ -1387,11 +1457,10 @@ ISSUES:
           "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null || echo "")
         if [ -n "$error_issues" ]; then
           echo "  [Step 2a] Codex 发现 ERROR 级问题，触发 Antigravity 修复..." >&2
-          opencli antigravity send \
-            --model="antigravity-gemini-3-flash" --variant="minimal" \
+          antigravity_send_message \
             "修复以下代码规范问题：
 $error_issues
-严格按 FIX 建议修改，不要改其他代码。" >/dev/null 2>&1 || true
+严格按 FIX 建议修改，不要改其他代码。" "fast" || true
         fi
         local warning_issues
         warning_issues=$(grep -A3 "SEVERITY: WARNING" \

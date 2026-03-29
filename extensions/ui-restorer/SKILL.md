@@ -16,14 +16,14 @@ description: >
 
 ## Antigravity 模式策略
 
-| 场景 | 模式 | opencli 参数 |
+| 场景 | 模式 | 当前落地方式 |
 |------|------|-------------|
-| 生成 UI 代码 / 带 diff 定向修复（复杂改动） | **Thinking** | `--model=antigravity-gemini-3-pro --variant=high` |
-| 截图对比 Figma → 视觉打分 + 找 diff | **Pro** | `--model=antigravity-gemini-3-pro` |
-| 微调修复（颜色值/字号/间距等小改动） | **Fast** | `--model=antigravity-gemini-3-flash --variant=minimal` |
+| 生成 UI 代码 / 带 diff 定向修复（复杂改动） | **Thinking** | 优先 `Claude Opus 4.6 (Thinking)`，额度/不可用时顺延降级到 `Gemini 3.1 Pro (High)`，再降到 `Gemini 3 Flash` |
+| 截图对比 Figma → 视觉打分 + 找 diff | **Codex 评分** | 用 `chrome-cdp-skill` 截图后交给 Codex 输出 `SCORE / DIFF_COMPLEXITY / FIXES / PASS` |
+| 微调修复（颜色值/字号/间距等小改动） | **Fast** | 优先 `Gemini 3.1 Pro (High)`，不可用时降级到 `Gemini 3 Flash`，用更短、更聚焦的 diff 修复提示词驱动 `send` |
 
 **模式切换规则：**
-- Pro 模式打分时同时输出 `DIFF_COMPLEXITY: minor|major`
+- Codex 评分时输出 `DIFF_COMPLEXITY: minor|major`
 - `minor` → Round 2 用 Fast 模式执行修复（颜色/字号/间距等数值调整）
 - `major` → Round 2 用 Thinking 模式执行修复（布局重构/组件替换）
 
@@ -100,7 +100,7 @@ Figma MCP 提取生成）。按块顺序执行，每块独立走完 Round 1 → 
 ### 结构化提示词模板（Round 1，Thinking 模式）
 
 ```
-opencli antigravity send --model=antigravity-gemini-3-pro --variant=high "
+opencli antigravity send "
 你只负责 UI 还原，不碰业务逻辑。
 
 ## 当前任务
@@ -135,12 +135,13 @@ $(cat tasks.md 中对应 task 的 还原策略 字段)
 # 1. 用 chrome-cdp-skill 截图
 node scripts/cdp.mjs shot {TAB_TARGET} /tmp/ui-restore-{feature}-{block}-round{N}.png
 
-# 2. 用 Antigravity Pro 模式视觉对比
-opencli antigravity send --model=antigravity-gemini-3-pro "
-请对比以下两张图，评估 UI 还原质量：
+# 2. 用 Codex 做结构化视觉评分
+codex exec --full-auto "
+请基于以下信息评估 UI 还原质量：
 
-图1（Figma 设计稿）：通过 Figma MCP 打开 {FIGMA_URL}，查看 {NODE_ID} 节点
-图2（当前渲染截图）：[附图: /tmp/ui-restore-{feature}-{block}-round{N}.png]
+Figma 设计稿：{FIGMA_URL}
+目标区域：{NODE_ID 或 BLOCK_NAME}
+当前渲染截图文件：/tmp/ui-restore-{feature}-{block}-round{N}.png
 
 评估维度：
 1. 整体布局结构是否一致
@@ -169,13 +170,11 @@ Round 1 完成
 SCORE >= 8？
   ├── YES → 该块 PASS，进入下一块
   └── NO  → 读取 DIFF_COMPLEXITY
-              ├── minor → Round 2: Fast 模式微调
+              ├── minor → Round 2: 精确微调
               │     opencli antigravity send \
-              │       --model=antigravity-gemini-3-flash --variant=minimal \
               │       "根据以下 diff 进行精确修复：{FIXES 列表}"
-              └── major → Round 2: Thinking 模式重构
+              └── major → Round 2: 结构性重构
                     opencli antigravity send \
-                      --model=antigravity-gemini-3-pro --variant=high \
                       "根据以下 diff 进行修复：{FIXES 列表}
                        Figma 设计规格参考：{DESIGN_SPEC}"
                 ↓
@@ -340,6 +339,8 @@ antigravity 任务必须包含以下字段：
 ```
 
 ### 常用命令
+
+> 注：当前 `opencli 1.3.x` 下，`opencli antigravity send` 负责发消息；若要读取 AI 回复，需额外调用 `opencli antigravity read` 或 `watch`。`send` 不再支持 `--model` / `--variant` 参数。
 
 ```bash
 # 列出所有 tab
