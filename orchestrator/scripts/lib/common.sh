@@ -72,9 +72,9 @@ get_project_root() {
 # ============================================================
 load_env() {
   local root="${1:-$(get_project_root)}"
-  if [ -f "$root/.env" ]; then
+  if [ -f "$root/.env.ai-digital-workflow" ]; then
     set -a
-    source "$root/.env"
+    source "$root/.env.ai-digital-workflow"
     set +a
   fi
 }
@@ -140,25 +140,56 @@ log() {
   local log_file="${2:-}"
   local timestamp
   timestamp=$(date '+%H:%M:%S')
-  echo "[$timestamp] $message"
+  echo "[$timestamp] $message" >&2
   if [ -n "$log_file" ]; then
     echo "[$timestamp] $message" >> "$log_file"
   fi
 }
 
 # ============================================================
-# 统一飞书通知（安全 JSON）
+# 统一飞书通知
+# 优先用 openclaw message send（主动私信），fallback 到 webhook
 # 用法: feishu_notify "消息内容" [feature_name]
+#
+# 配置项（.env.ai-digital-workflow）:
+#   OPENCLAW_BIN          — openclaw 可执行文件绝对路径
+#   FEISHU_NOTIFY_TARGET  — openclaw 目标 ID（飞书用户 open_id 或群 chat_id）
+#   FEISHU_WEBHOOK_URL    — fallback webhook URL（可选）
 # ============================================================
+
+# 获取 openclaw 可执行路径（优先用配置的绝对路径，fallback 到 PATH）
+_openclaw_bin() {
+  if [ -n "${OPENCLAW_BIN:-}" ] && [ -x "$OPENCLAW_BIN" ]; then
+    echo "$OPENCLAW_BIN"
+  elif command -v openclaw >/dev/null 2>&1; then
+    echo "openclaw"
+  else
+    echo ""
+  fi
+}
+
 feishu_notify() {
   local message="$1"
   local feature="${2:-unknown}"
+  local full_message="[🤖 AI Workforce: $feature] $message"
+  local openclaw_bin
+  openclaw_bin=$(_openclaw_bin)
 
+  # 优先：openclaw 主动私信
+  if [ -n "$openclaw_bin" ] && [ -n "${FEISHU_NOTIFY_TARGET:-}" ]; then
+    "$openclaw_bin" message send \
+      --channel feishu \
+      --target "$FEISHU_NOTIFY_TARGET" \
+      --message "$full_message" \
+      > /dev/null 2>&1 || true
+    return 0
+  fi
+
+  # Fallback：webhook
   if [ -z "${FEISHU_WEBHOOK_URL:-}" ]; then
     return 0
   fi
 
-  # 根据内容选择颜色
   local template="blue"
   if echo "$message" | grep -qi "error\|fail\|blocked\|❌"; then
     template="red"
@@ -168,7 +199,6 @@ feishu_notify() {
     template="orange"
   fi
 
-  # 用 jq 安全构建 JSON
   local payload
   payload=$(jq -n \
     --arg title "🤖 AI Workforce: $feature" \
@@ -193,6 +223,55 @@ feishu_notify() {
     -H "Content-Type: application/json" \
     --max-time 10 --connect-timeout 5 \
     -d "$payload" > /dev/null 2>&1 || true
+}
+
+# ============================================================
+# Agent 主动对话通知（需要用户决策的关键节点）
+# 与 feishu_notify 的区别：
+#   feishu_notify  → 单向推送，纯告知，不需要用户回复
+#   agent_notify   → Agent 发起对话，需要用户做决定，回复后 Agent 继续执行
+#
+# 用法: agent_notify "上下文描述" "要问用户的问题"
+#
+# 配置项（.env）:
+#   FEISHU_NOTIFY_TARGET — 飞书用户 open_id
+#   OPENCLAW_AGENT_ID   — Agent ID，默认 ai-react
+# ============================================================
+agent_notify() {
+  local context="$1"
+  local question="$2"
+  local feature="${3:-unknown}"
+  local agent_id="${OPENCLAW_AGENT_ID:-}"
+  local openclaw_bin
+  openclaw_bin=$(_openclaw_bin)
+
+  if [ -z "$openclaw_bin" ] || [ -z "${FEISHU_NOTIFY_TARGET:-}" ] || [ -z "$agent_id" ]; then
+    # fallback：降级为普通通知
+    feishu_notify "$context\n\n$question" "$feature"
+    return 0
+  fi
+
+  # 构造给 Agent 的消息：包含工作流上下文 + 需要问用户的问题
+  local agent_message
+  agent_message="$(cat <<EOF
+【工作流事件】feature: $feature
+$context
+
+请用中文把以下问题发给用户，等待用户回复后根据回复执行对应命令：
+$question
+EOF
+)"
+
+  "$openclaw_bin" agent \
+    --agent "$agent_id" \
+    --message "$agent_message" \
+    --deliver \
+    --reply-channel feishu \
+    --reply-to "$FEISHU_NOTIFY_TARGET" \
+    > /dev/null 2>&1 || {
+      # Agent 调用失败，fallback 到普通通知
+      feishu_notify "$context\n\n$question" "$feature"
+    }
 }
 
 # ============================================================

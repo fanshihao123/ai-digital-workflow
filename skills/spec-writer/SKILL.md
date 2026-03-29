@@ -78,10 +78,20 @@ description: >
 
 优先级：.claude/ 项目规范 > 公司 skills > Claude 自身知识
 
-## 输出：三个文件一次性生成
+## 输出：两阶段生成（避免澄清前浪费 token）
 
 所有输出保存到 `specs/{feature-name}/` 目录。
 需求名称使用英文 kebab-case，如 `specs/user-login-oauth/`。
+
+> **分阶段调用说明**
+> - **Stage 1a**：仅生成 `requirements.md`。编排器检测开放问题，若有 `[UNCERTAIN]` 则暂停询问用户，答复后重新执行 Stage 1a。
+> - **Stage 1b**：需求确认无歧义后，基于已有 `requirements.md` 生成 `design.md + tasks.md`。
+>   - 若 requirements.md 中包含 Figma URL，且有 UI 还原任务：
+>     先调用 `opencli antigravity`（Thinking 模式）连接 Figma MCP 提取设计规格和分块策略，
+>     再将提取结果写入 tasks.md 对应任务的 `设计规格` 和 `还原策略` 字段。
+>   - 若任务需要 `agent: antigravity` 但 requirements.md 中**没有 Figma URL**：
+>     在 `requirements.md` 的开放问题部分追加 `[UNCERTAIN]` 项，触发暂停询问用户要 Figma 链接。
+> - 这样 `[UNCERTAIN]` 只会导致 `requirements.md` 重新生成，不会浪费 `design.md + tasks.md` 的 token。
 
 ### 1. requirements.md
 
@@ -163,11 +173,23 @@ description: >
 ### Task 2：{页面名} UI 还原
 - agent: antigravity
 - figma: {figma-design-url}
+- 预览路由: /{route-path}
 - 状态：pending
-- 文件范围：{组件文件路径}
+- 文件范围：`{组件文件路径}`
 - 依赖：Task 1
-- 指令：根据 Figma 设计稿还原页面，只生成 UI 组件和样式
-- 不要包含：API 调用、状态管理、路由逻辑
+- 设计规格：
+  - 布局：{整体布局描述，由 Antigravity Figma MCP 提取}
+  - 容器：{padding / border-radius / shadow}
+  - 主色：{颜色值或 design token}
+  - 字体：{标题/正文/标签的字号和字重}
+  - 间距：{主要元素间距规律}
+  - 组件：{使用到的 design system 组件列表}
+- 还原策略：
+  - 块1: {区块名称，由 Antigravity 分析 Figma 后决定}
+  - 块2: {区块名称}
+  - 块3: {区块名称}
+  - 块N: {响应式适配}
+- 指令：只生成 UI 组件和样式，不包含 API 调用、状态管理、路由逻辑
 
 ### Task 3：{页面名} 业务集成
 - agent: claude-code
@@ -179,7 +201,8 @@ description: >
 **agent 标记规则**：
 - `agent: claude-code`（或省略）→ Claude Code Sonnet 执行
 - `agent: antigravity` → Antigravity + Figma MCP 执行（需 ENABLE_UI_RESTORER=true）
-- 涉及 Figma 设计稿的纯 UI 还原任务 → 标记 `agent: antigravity` + 附带 `figma:` URL
+- 涉及 Figma 设计稿的纯 UI 还原任务 → 标记 `agent: antigravity` + 附带 `figma:` URL + `预览路由`
+- `设计规格` 和 `还原策略` 字段由 Stage 1b 调用 Antigravity Figma MCP 自动填充
 - UI 任务之后紧跟一个 `agent: claude-code` 的集成任务
 
 ## 复杂度评估规则

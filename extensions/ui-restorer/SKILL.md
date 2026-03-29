@@ -1,226 +1,379 @@
 ---
 name: ui-restorer
 description: >
-  可插拔扩展。通过 Antigravity + Figma MCP 进行 UI 设计还原，还原完成后
-  交给 Claude Code + OpenCLI Codex 进行双重审查（代码质量 + UI 一致性）。
-  Antigravity 只负责 UI 组件和样式生成，不碰业务逻辑。
+  可插拔扩展。通过 Antigravity（Gemini 3 多模态）+ Figma MCP 进行分块 UI 设计还原。
+  还原流程：dev server 检查 → 分块还原（2轮自动重试 + 截图视觉反馈闭环）→ 人工确认节点
+  → Codex 代码规范审查。Antigravity 按场景切换 Thinking/Pro/Fast 三种模式。
   启用方式：.env 中设置 ENABLE_UI_RESTORER=true。
-  触发条件：tasks.md 中存在 agent: antigravity 标记的任务、
-  Figma URL 输入、"还原页面"、"画页面"、"UI 还原"。
+  触发条件：tasks.md 中存在 agent: antigravity 标记的任务。
 ---
 
-# ui-restorer — Antigravity 设计还原 + 双重审查（可插拔扩展）
+# ui-restorer — Antigravity 分块还原 + 视觉反馈闭环（可插拔扩展）
 
 ## 启用条件
 
 `.env` 中 `ENABLE_UI_RESTORER=true`。未启用则所有任务由 Claude Code 执行。
 
-## 三阶段流程
+## Antigravity 模式策略
+
+| 场景 | 模式 | opencli 参数 |
+|------|------|-------------|
+| 生成 UI 代码 / 带 diff 定向修复（复杂改动） | **Thinking** | `--model=antigravity-gemini-3-pro --variant=high` |
+| 截图对比 Figma → 视觉打分 + 找 diff | **Pro** | `--model=antigravity-gemini-3-pro` |
+| 微调修复（颜色值/字号/间距等小改动） | **Fast** | `--model=antigravity-gemini-3-flash --variant=minimal` |
+
+**模式切换规则：**
+- Pro 模式打分时同时输出 `DIFF_COMPLEXITY: minor|major`
+- `minor` → Round 2 用 Fast 模式执行修复（颜色/字号/间距等数值调整）
+- `major` → Round 2 用 Thinking 模式执行修复（布局重构/组件替换）
+
+## 完整流程
 
 ```
-tasks.md 中 agent: antigravity 的任务
-                  |
-         ┌───────┴───────┐
-         │ Stage 1: 还原  │  Antigravity + Figma MCP
-         │ 独立 worktree  │  只生成 UI 组件 + 样式
-         └───────┬───────┘
-                 |
-         ┌───────┴───────┐
-         │ Stage 2: 审查  │  Claude Code 代码质量审查
-         │               │  + OpenCLI Codex UI 一致性审查
-         └───────┬───────┘
-                 |
-          有问题？─── yes → Antigravity 修复 → 再审查
-                 |
-                 no
-                 |
-         ┌───────┴───────┐
-         │ Stage 3: 集成  │  Claude Code 接入业务逻辑
-         │ API/状态/路由   │  (tasks.md 中的下一个任务)
-         └───────────────┘
+tasks.md 中所有 agent: antigravity 任务
+    ↓
+[Phase 0] dev server 检查
+    ↓
+[Phase 1] 逐任务分块还原（含 2 轮自动重试 + 视觉反馈闭环）
+    ↓
+[Phase 2] 人工确认节点（按模块数量决定汇报粒度）
+    ↓
+[Phase 3] Codex 代码规范审查（一轮）
+    ↓
+[Phase 4] claude-code 接入业务逻辑
 ```
 
-## Stage 1：Antigravity UI 还原
+---
 
-### 环境准备
+## Phase 0：dev server 检查
 
-Antigravity 在独立 worktree 中工作（如 worktree-parallel 已启用）
-或在主目录中工作（如未启用 worktree 扩展）。
-
-### Figma MCP 配置
-
-在 Antigravity 的 `mcp_config.json` 中配置 Figma：
-
-```jsonc
-{
-  "mcpServers": {
-    // 方式 A：Figma 官方 Dev Mode MCP（推荐，远程零配置）
-    "figma": {
-      "url": "https://mcp.figma.com/mcp",
-      "type": "streamable-http"
-    }
-
-    // 方式 B：社区 figma-mcp-server（本地 stdio）
-    // "figma": {
-    //   "command": "npx",
-    //   "args": ["-y", "figma-mcp-server", "--stdio"],
-    //   "env": { "FIGMA_API_KEY": "${FIGMA_API_KEY}" }
-    // }
-
-    // 方式 C：Composio Rube MCP（聚合网关）
-    // "rube": {
-    //   "command": "npx",
-    //   "args": ["-y", "rube-mcp", "--api-key=${RUBE_API_KEY}"]
-    // }
-  }
-}
-```
-
-### 调度 Antigravity
+### 检查逻辑
 
 ```bash
-# 方式 1：OpenCLI CLI 化 Antigravity（推荐，编排器可自动调度）
-opencli antigravity "
-  打开 Figma 设计稿: ${FIGMA_URL}
-  根据设计稿生成以下文件:
-  - ${FILE_PATH} (React/Vue 组件)
-  只生成 UI 组件和样式代码。
-  不要包含: API 调用、状态管理、路由跳转、事件处理逻辑。
-  遵循项目的组件命名规范和目录结构。
-  使用项目已有的 design system 组件（如 Button、Input 等）。
-"
+# 检查常见端口（按 package.json 中的 dev 脚本端口优先）
+DEV_PORT=$(node -e "
+  const pkg = require('./package.json');
+  const devScript = pkg.scripts?.dev || '';
+  const match = devScript.match(/--port[= ](\d+)/);
+  console.log(match ? match[1] : '3000');
+" 2>/dev/null || echo "3000")
 
-# 方式 2：手动在 Antigravity IDE 中操作
-# 打开 Antigravity → 粘贴 Figma URL → 生成代码 → 提交到 worktree 分支
+if lsof -i :"$DEV_PORT" | grep -q LISTEN 2>/dev/null; then
+  echo "RUNNING:$DEV_PORT"
+else
+  echo "STOPPED:$DEV_PORT"
+fi
 ```
 
-### Antigravity 生成规范
+### 三种情况处理
 
-指导 Antigravity 生成代码时遵循这些规则：
-
+**情况 1：dev server 已开启**
 ```
-Antigravity 生成提示词模板:
-
-你只负责 UI 还原。根据 Figma 设计稿 {figma_url} 生成代码。
-
-必须遵循:
-1. 使用项目的 design system 组件（检查 src/components/ui/）
-2. 使用项目的 CSS 变量 / Tailwind 配置（检查 tailwind.config）
-3. 组件文件放在 {file_path} 路径
-4. Props 接口定义在组件文件顶部
-5. 响应式断点: mobile(375) / tablet(768) / desktop(1440)
-
-不要包含:
-- API 调用（用 TODO 注释标记数据来源）
-- 状态管理逻辑（用 props 传入，不用 useState/Redux）
-- 路由跳转（用 onClick props 代替 router.push）
-- 硬编码文字（用 props 或 i18n key）
-- 内联颜色值（用 design token / CSS 变量）
+→ cdp nav 到对应 Task 的预览路由
+→ feishu_notify "dev server 已在 http://localhost:{PORT} 运行，
+   正在打开 {PREVIEW_ROUTE} 进行 UI 还原..."
 ```
 
-## Stage 2：双重审查
+**情况 2：dev server 未开启**
+```
+→ 后台启动: nohup npm run dev > /tmp/devserver-{feature}.log 2>&1 &
+→ 等待端口就绪（最多 60s，每 2s 检查一次）
+→ 就绪后 feishu_notify "dev server 已启动: http://localhost:{PORT}{PREVIEW_ROUTE}"
+→ cdp nav 到预览路由
+```
 
-Antigravity 提交代码后，分两步审查：
+**情况 3：启动失败（60s 超时）**
+```
+→ agent_notify:
+  "dev server 启动失败，日志: /tmp/devserver-{feature}.log
+   请手动启动后执行 /resume {feature}"
+→ 流水线暂停（return 1）
+```
 
-### 审查 A：Claude Code 代码质量审查
+---
 
-```bash
-opencli claude --permission-mode bypassPermissions --model sonnet --print "
-  审查 Antigravity 生成的 UI 代码。
-  
-  变更文件: $(git diff --name-only HEAD~1..HEAD)
-  
-  审查重点（与纯逻辑审查不同）:
-  1. 是否使用项目已有的 design system 组件（不要重复造轮子）
-  2. 是否有硬编码颜色/字号/间距（应使用 design token）
-  3. 组件命名是否符合项目规范
-  4. Props 接口是否合理（纯 UI 组件不应依赖业务类型）
-  5. 响应式实现是否正确
-  6. 是否有不必要的 div 嵌套层级
-  7. 图片/图标是否使用了正确的导入方式
-  
-  项目组件规范: $(cat .claude/CODING_GUIDELINES.md | grep -A 50 '组件\|component')
+## Phase 1：分块还原（核心循环）
+
+tasks.md 中每个 `agent: antigravity` 任务包含分块策略（由 spec-writer Stage 1b 通过
+Figma MCP 提取生成）。按块顺序执行，每块独立走完 Round 1 → Round 2 → 人工节点流程。
+
+### 结构化提示词模板（Round 1，Thinking 模式）
+
+```
+opencli antigravity send --model=antigravity-gemini-3-pro --variant=high "
+你只负责 UI 还原，不碰业务逻辑。
+
+## 当前任务
+页面：{TASK_NAME}
+当前分块：{BLOCK_NAME}（第 {BLOCK_INDEX}/{BLOCK_TOTAL} 块）
+生成文件：{FILE_PATH}
+预览路由：{PREVIEW_ROUTE}
+
+## Figma 设计规格（已从 Figma MCP 提取）
+{DESIGN_SPEC}
+（包含：布局结构 / 间距 / 颜色 / 字体 / 组件层级）
+
+## 项目约束
+- 使用项目已有的 design system 组件（src/components/ui/）
+- 使用项目的 CSS 变量 / Tailwind 配置（检查 tailwind.config）
+- 响应式断点：mobile(375) / tablet(768) / desktop(1440)
+- Props 接口定义在组件顶部
+- 禁止：API 调用 / 状态管理 / 路由跳转 / 硬编码颜色值 / 内联样式
+
+## 分块还原顺序
+$(cat tasks.md 中对应 task 的 还原策略 字段)
+
+请生成 {BLOCK_NAME} 的代码，写入 {FILE_PATH}。
 "
 ```
 
-### 审查 B：OpenCLI Codex UI 一致性 + a11y 审查
+### 截图 + 视觉打分（Pro 模式）
+
+每轮生成后：
+
+```bash
+# 1. 用 chrome-cdp-skill 截图
+node scripts/cdp.mjs shot {TAB_TARGET} /tmp/ui-restore-{feature}-{block}-round{N}.png
+
+# 2. 用 Antigravity Pro 模式视觉对比
+opencli antigravity send --model=antigravity-gemini-3-pro "
+请对比以下两张图，评估 UI 还原质量：
+
+图1（Figma 设计稿）：通过 Figma MCP 打开 {FIGMA_URL}，查看 {NODE_ID} 节点
+图2（当前渲染截图）：[附图: /tmp/ui-restore-{feature}-{block}-round{N}.png]
+
+评估维度：
+1. 整体布局结构是否一致
+2. 间距/padding/margin 是否准确
+3. 颜色/字体/字号是否匹配
+4. 组件细节（圆角/阴影/边框）是否还原
+5. 响应式是否正确
+
+输出格式（严格遵循）：
+SCORE: {1-10}
+DIFF_COMPLEXITY: minor|major
+FIXES:
+  - {具体修复项1，格式: 元素.属性: 实际值 → 设计值}
+  - {具体修复项2}
+PASS: true|false  （SCORE >= 8 为 true）
+"
+```
+
+### Round 1 → Round 2 决策树
+
+```
+Round 1 完成
+    ↓
+截图 → Pro 模式打分
+    ↓
+SCORE >= 8？
+  ├── YES → 该块 PASS，进入下一块
+  └── NO  → 读取 DIFF_COMPLEXITY
+              ├── minor → Round 2: Fast 模式微调
+              │     opencli antigravity send \
+              │       --model=antigravity-gemini-3-flash --variant=minimal \
+              │       "根据以下 diff 进行精确修复：{FIXES 列表}"
+              └── major → Round 2: Thinking 模式重构
+                    opencli antigravity send \
+                      --model=antigravity-gemini-3-pro --variant=high \
+                      "根据以下 diff 进行修复：{FIXES 列表}
+                       Figma 设计规格参考：{DESIGN_SPEC}"
+                ↓
+            再次截图 → Pro 模式打分
+                ↓
+            SCORE >= 8？
+              ├── YES → 该块 PASS
+              └── NO  → 记录为 NEEDS_HUMAN_REVIEW
+                         附: 截图路径 + FIXES 列表 + 当前得分
+```
+
+---
+
+## Phase 2：人工确认节点
+
+### 汇报粒度决策
+
+```
+当前任务总块数 = tasks.md 中 还原策略 的分块数量
+
+块数 <= 3：
+  → 所有块完成后一次汇报
+
+块数 > 3：
+  → 每完成 3 块汇报一次（3块、6块、9块...）
+  → 最后不足 3 块的余量在全部完成后汇报
+```
+
+### agent_notify 消息格式
+
+```
+# 汇报消息内容
+context="UI 还原进度报告 — {TASK_NAME}
+
+已完成分块：{已完成块列表}
+自动通过（SCORE >= 8）：{通过块数}/{总块数}
+
+{如有需人工确认的块}：
+─ {块名}：当前得分 {SCORE}/10
+  主要问题：{FIXES 列表}
+  截图已保存：{截图路径}
+
+{附所有截图路径供查看}"
+
+question="请查看截图后回复：
+1. 满意 → 回复「继续」
+2. 不满意 → 描述具体问题（如：按钮颜色不对/间距太大），
+   我会带着你的反馈让 Antigravity 重新修复"
+```
+
+### 用户回复处理
+
+```
+用户回复「继续」→ 进入 Phase 3 Codex 审查
+用户回复具体反馈 → Antigravity Thinking 模式带反馈重试
+                    重试后再次截图 → 再次汇报（不再计入自动重试轮次）
+```
+
+---
+
+## Phase 3：Codex 代码规范审查（一轮）
+
+所有块还原完成并通过人工确认后，执行一轮 Codex 代码审查：
 
 ```bash
 codex exec --full-auto "
-  审查以下 UI 代码的可访问性和设计一致性。
-  
-  Diff: $(git diff HEAD~1..HEAD)
-  
-  检查:
-  1. 所有交互元素是否有 aria-label 或 alt 文本
-  2. 颜色对比度是否满足 WCAG AA 标准
-  3. 键盘导航是否可用（tabIndex, focus 管理）
-  4. 表单是否有 label 关联
-  5. 语义化 HTML（不要全是 div）
-  6. 图片是否有适当的 loading 策略（lazy）
+审查 Antigravity 生成的 UI 代码（代码规范审查，非视觉审查）。
+
+变更文件：
+$(git diff --name-only HEAD)
+
+审查清单：
+1. 是否有硬编码颜色/字号/间距（必须使用 design token / CSS 变量）
+2. 是否重复造轮子（项目已有的 design system 组件是否被正确使用）
+3. Props 接口是否合理（纯 UI 组件不应依赖业务类型）
+4. 是否有不必要的 div 嵌套（超过 4 层需说明）
+5. 所有交互元素是否有 aria-label 或 alt 文本（a11y）
+6. 表单元素是否有 label 关联
+7. 图片是否使用 lazy loading
+8. 组件命名是否符合项目规范（检查 .claude/CODING_GUIDELINES.md）
+
+输出格式：
+CODEX_VERDICT: PASS|FAIL
+ISSUES:
+  - SEVERITY: WARNING|ERROR
+    FILE: {文件路径}
+    LINE: {行号}
+    ISSUE: {问题描述}
+    FIX: {修复建议}
 "
 ```
 
 ### 审查结果处理
 
 ```
-两个审查都 PASS → Stage 3 集成
-任一审查 FAIL → 生成修复指令 → Antigravity 修复 → 再审查（最多 2 轮）
-2 轮后仍 FAIL → Claude Code 接管修复
+CODEX_VERDICT: PASS → 继续 Phase 4
+CODEX_VERDICT: FAIL →
+  ERROR 级别问题 → Antigravity Fast/Thinking 模式修复后再次审查
+  WARNING 级别问题 → feishu_notify 列出警告，继续 Phase 4（不阻塞）
 ```
 
-## Stage 3：集成（由 Claude Code 执行）
+---
 
-审查通过后，tasks.md 中 `agent: antigravity` 任务标记为 done，
-下一个依赖任务（`agent: claude-code`）负责业务集成：
+## Phase 4：业务集成（claude-code 执行）
+
+Antigravity 任务标记为 done，触发 tasks.md 中依赖该任务的 `agent: claude-code` 任务：
 
 ```markdown
-### Task 4：登录页面集成
+### Task N+1：{页面名称} 业务集成
 - agent: claude-code
-- 依赖：Task 3（UI 还原）
+- 依赖：Task N（UI 还原）
 - 指令：
-  - 将 LoginForm 组件接入 /login 路由
-  - 绑定 POST /api/auth/login API
-  - 添加表单验证（邮箱格式 + 密码长度）
-  - 接入全局 auth 状态管理
-  - 添加登录失败错误提示
+  - 将 {组件名} 接入 {路由}
+  - 绑定 {API 端点}
+  - 接入状态管理
+  - 添加表单验证
+  - 添加错误处理
 ```
 
-## tasks.md 标记规范
+---
 
-spec-writer 在生成 tasks.md 时，UI 还原任务使用以下格式：
+## tasks.md 任务格式规范
+
+spec-writer Stage 1b 通过 Antigravity + Figma MCP 提取设计规格后，
+antigravity 任务必须包含以下字段：
 
 ```markdown
 ### Task N：{页面名称} UI 还原
 - agent: antigravity
 - figma: {figma-url}
-- 文件范围：{生成文件路径}
-- 指令：根据 Figma 设计稿还原 {页面名称}，只生成 UI 组件和样式
-- 不要包含：API 调用、状态管理、路由逻辑
-
-### Task N+1：{页面名称} 业务集成
-- agent: claude-code
-- 依赖：Task N
-- 指令：将 Task N 的 UI 组件接入业务逻辑（API/状态/路由）
+- 预览路由: /{route-path}
+- 状态：pending
+- 文件范围：`{组件文件路径}`
+- 依赖：Task {前置任务编号}
+- 设计规格：
+  - 布局：{整体布局描述，如：垂直居中，max-width 480px}
+  - 容器：{padding, border-radius, shadow}
+  - 主色：{颜色值或 design token}
+  - 字体：{标题/正文/标签的字号和字重}
+  - 间距：{主要元素间距规律}
+  - 组件：{使用到的 design system 组件列表}
+- 还原策略：
+  - 块1: {区块名称}（如：整体布局框架）
+  - 块2: {区块名称}（如：表单输入区域）
+  - 块3: {区块名称}（如：按钮和操作区）
+  - 块4: {区块名称}（如：响应式适配）
+- 指令：只生成 UI 组件和样式，不包含 API 调用、状态管理、路由逻辑
 ```
 
-编排器看到 `agent: antigravity` 就调度本扩展，`agent: claude-code`（或无标记）走正常 Claude Code 执行。
+---
 
-## Figma 设计稿准备建议
+## chrome-cdp-skill 集成
 
-提高 Antigravity 还原质量的 Figma 规范：
+本扩展使用 chrome-cdp-skill 作为截图工具，默认走项目内置入口 `scripts/cdp.mjs`。
 
-1. **命名图层** — 用有意义的名称如 `login-form-email-input` 而不是 `Frame 42`
-2. **使用 Auto Layout** — Antigravity 能更好地理解 flex 布局意图
-3. **定义 Design Token** — 颜色、字号、间距用 Figma Variables，不用裸值
-4. **标注交互状态** — hover、active、disabled 做成 Variant
-5. **开启 Dev Mode 注释** — 在 Figma Dev Mode 中为关键元素添加注释，Figma MCP 会读取
+### 安装
+
+```bash
+# 将 chrome-cdp-skill 的 cdp.mjs 放到目标项目根目录
+# 目标路径：scripts/cdp.mjs
+# 并确保 Chrome 已开启 remote debugging（chrome://inspect/#remote-debugging）
+```
+
+### 常用命令
+
+```bash
+# 列出所有 tab
+node scripts/cdp.mjs list
+
+# 截图（返回 PNG 文件）
+node scripts/cdp.mjs shot {target} {output.png}
+
+# 导航到指定 URL
+node scripts/cdp.mjs nav {target} http://localhost:3000/login
+
+# 获取 computed styles（辅助 diff 分析）
+node scripts/cdp.mjs eval {target} "
+  JSON.stringify([...document.querySelectorAll('[class]')].slice(0,20).map(el => ({
+    tag: el.tagName,
+    class: el.className,
+    styles: {
+      height: getComputedStyle(el).height,
+      padding: getComputedStyle(el).padding,
+      color: getComputedStyle(el).color,
+      fontSize: getComputedStyle(el).fontSize
+    }
+  })))
+"
+```
+
+---
 
 ## 环境变量
 
 | 变量 | 说明 |
 |------|------|
 | `ENABLE_UI_RESTORER` | 启用本扩展 (true/false) |
-| `FIGMA_API_KEY` | Figma Personal Access Token（方式 B/C 需要） |
-| `RUBE_API_KEY` | Composio Rube API Key（方式 C 需要） |
-| `UI_REVIEW_ROUNDS` | 审查轮次上限，默认 2 |
+| `FIGMA_API_KEY` | Figma Personal Access Token（Figma MCP 本地模式需要） |
+| `DEV_SERVER_PORT` | dev server 端口，默认自动检测（fallback 3000） |
+| `UI_RESTORE_SCORE_THRESHOLD` | 自动通过分数阈值，默认 8 |
+| `UI_RESTORE_REPORT_BATCH_SIZE` | 分批汇报块数，默认 3 |

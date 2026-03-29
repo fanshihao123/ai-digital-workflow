@@ -31,7 +31,10 @@ cleanup() {
     feature=$(detect_feature_name)
     if [ -n "$feature" ]; then
       pipeline_state_set "$feature" "last_run" "failed"
-      feishu_notify "❌ 流水线异常退出: $feature (exit code: $exit_code)" "$feature"
+      agent_notify \
+        "需求 '$feature' 的流水线异常退出（exit code: $exit_code），可执行 /resume $feature 从断点继续。" \
+        "需要我帮你排查原因吗？还是直接 /resume $feature 继续？" \
+        "$feature"
       log "PIPELINE_FAILED: $feature (exit code: $exit_code)" "$PROJECT_ROOT/specs/.workflow-log"
     fi
   fi
@@ -189,13 +192,28 @@ mark_clarification_answered() {
   fi
 }
 
+# 检查是否处于 /pause 手动暂停状态
+has_paused_state() {
+  local feature_name="$1"
+  local state_file="$PROJECT_ROOT/specs/$feature_name/paused.json"
+  [ -f "$state_file" ] && jq -e '.status == "paused"' "$state_file" >/dev/null 2>&1
+}
+
+# 读取 paused.json 指定字段
+get_paused_field() {
+  local feature_name="$1"
+  local field="$2"
+  local state_file="$PROJECT_ROOT/specs/$feature_name/paused.json"
+  [ -f "$state_file" ] && jq -r ".$field // empty" "$state_file" 2>/dev/null || true
+}
+
 # 格式化开放问题并通过飞书发送给用户
 notify_open_questions() {
   local feature_name="$1"
   local questions_text="$2"
   local q_count
   q_count=$(echo "$questions_text" | grep -c "." 2>/dev/null || echo 0)
-  local msg="⏸️ Step 1 已暂停 — 需确认 ${q_count} 个问题后才能继续\n\n"
+  local questions_list=""
   local idx=1
   while IFS= read -r qline; do
     [ -z "$qline" ] && continue
@@ -204,11 +222,13 @@ notify_open_questions() {
       | sed 's/^[[:space:]]*-[[:space:]]*\[[[:space:]]*\][[:space:]]*//' \
       | sed 's/\[INFERRED\][[:space:]]*//' \
       | xargs)
-    msg+="${idx}. ${q_text}\n"
+    questions_list+="${idx}. ${q_text}\n"
     idx=$((idx + 1))
   done <<< "$questions_text"
-  msg+="\n回复: \`/answer $feature_name 1.你的答案 2.你的答案\`"
-  notify "$msg" "$feature_name"
+
+  local context="需求 '$feature_name' 的 Step 1 已暂停，检测到 ${q_count} 个开放问题需要用户确认后才能继续生成设计和任务。"
+  local question="请逐一向用户提问：\n${questions_list}\n用户回复后执行：/answer $feature_name 1.答案 2.答案"
+  agent_notify "$context" "$question" "$feature_name"
 }
 
 extract_feature_scopes() {
@@ -681,8 +701,17 @@ human_gate_deploy() {
 
 # 检测活跃的 feature 名称
 detect_feature_name() {
-  ls -t "$PROJECT_ROOT"/specs/*/tasks.md 2>/dev/null \
-    | head -1 | sed "s|$PROJECT_ROOT/specs/||;s|/tasks.md||" || echo ""
+  # 优先找 tasks.md（Stage 1b 完成后），fallback 到 requirements.md（Stage 1a 完成后）
+  local by_tasks by_reqs
+  by_tasks=$(ls -t "$PROJECT_ROOT"/specs/*/tasks.md 2>/dev/null \
+    | head -1 | sed "s|$PROJECT_ROOT/specs/||;s|/tasks.md||" || echo "")
+  if [ -n "$by_tasks" ]; then
+    echo "$by_tasks"
+    return
+  fi
+  by_reqs=$(ls -t "$PROJECT_ROOT"/specs/*/requirements.md 2>/dev/null \
+    | head -1 | sed "s|$PROJECT_ROOT/specs/||;s|/requirements.md||" || echo "")
+  echo "$by_reqs"
 }
 
 # ============================================================
@@ -727,8 +756,8 @@ step1_spec_writer() {
     return 0
   fi
 
-  # Stage 1: Claude 生成初稿
-  echo "  [Stage 1] Claude 生成初稿..." >&2
+  # Stage 1a: Claude 仅生成 requirements.md（澄清前不生成 design/tasks，避免重复浪费）
+  echo "  [Stage 1a] Claude 生成 requirements.md..." >&2
   model=$(select_model "low")
   opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
     Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
@@ -737,8 +766,9 @@ step1_spec_writer() {
     Read $PROJECT_ROOT/.claude/SECURITY.md
     Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
     $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
-    Execute spec-writer Stage 1: generate requirements.md + design.md + tasks.md for: $input
-    $([ "$is_hotfix" = "true" ] && echo "This is a /hotfix — skip design, generate tasks.md directly with minimal requirements.md")
+    Execute spec-writer Stage 1a: generate requirements.md ONLY (do NOT generate design.md or tasks.md yet) for: $input
+    Mark all [UNCERTAIN] items as unchecked [ ] in the '开放问题' section of requirements.md.
+    $([ "$is_hotfix" = "true" ] && echo "This is a /hotfix — generate minimal requirements.md only, no open questions needed")
   " >&2
 
   local feature_name
@@ -758,7 +788,7 @@ step1_spec_writer() {
   # Jira 同步
   jira_sync "requirements-done" "$feature_name" >&2
 
-  # ── 开放问题检测：若有不确定项则暂停，等待用户澄清 ─────────────────────
+  # ── 开放问题检测：若有不确定项则暂停，等待用户澄清（此时 design/tasks 尚未生成）──
   if [ "$is_hotfix" = "false" ]; then
     local open_questions_text
     open_questions_text=$(extract_open_questions "$feature_name")
@@ -775,6 +805,20 @@ step1_spec_writer() {
     fi
   fi
   # ─────────────────────────────────────────────────────────────────────────
+
+  # Stage 1b: requirements.md 无开放问题，继续生成 design.md + tasks.md
+  echo "  [Stage 1b] Claude 生成 design.md + tasks.md..." >&2
+  opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
+    Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
+    Read $PROJECT_ROOT/.claude/CLAUDE.md
+    Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
+    Read $PROJECT_ROOT/.claude/SECURITY.md
+    Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
+    $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
+    Read $PROJECT_ROOT/specs/$feature_name/requirements.md
+    Execute spec-writer Stage 1b: generate design.md + tasks.md based on the confirmed requirements.md above.
+    $([ "$is_hotfix" = "true" ] && echo "This is a /hotfix — generate tasks.md directly with minimal design")
+  " >&2
 
   # 只有 hotfix 或简单任务允许跳过完整 spec 审查
   local complexity
@@ -849,7 +893,10 @@ step1_spec_writer() {
       "$PROJECT_ROOT/specs/$feature_name/spec-review.md" 2>/dev/null | tail -1)
     critical_count="${critical_count:-0}"
     if is_numeric "$critical_count" && [ "$critical_count" -ge 3 ]; then
-      notify "❌ Spec 审查发现 $critical_count 个严重问题，阻断流水线，需人工介入: $feature_name"
+      agent_notify \
+        "需求 '$feature_name' 的 Spec 审查发现 $critical_count 个严重问题，流水线已阻断。详见 specs/$feature_name/spec-review.md。" \
+        "是否需要我根据审查意见重新修改 spec 后继续？还是由你人工处理后再 /restart $feature_name？" \
+        "$feature_name"
       echo "  ❌ $critical_count 个 CRITICAL_ISSUES，阻断流水线" >&2
       return 1
     fi
@@ -921,49 +968,461 @@ step2_develop() {
   fi
 }
 
-# 顺序执行开发任务（含 Agent 路由）
+# ============================================================
+# dev server 生命周期管理
+# ============================================================
+
+# 检测 dev server 端口（从 package.json 读取，fallback 3000）
+_detect_dev_port() {
+  local pkg="$PROJECT_ROOT/package.json"
+  local port=""
+  if [ -f "$pkg" ]; then
+    port=$(node -e "
+      try {
+        const pkg = require('$pkg');
+        const devScript = pkg.scripts?.dev || '';
+        const match = devScript.match(/--port[= ](\d+)/);
+        console.log(match ? match[1] : '');
+      } catch(e) { console.log(''); }
+    " 2>/dev/null || true)
+  fi
+  echo "${port:-3000}"
+}
+
+# 检查 dev server 是否正在运行
+_dev_server_running() {
+  local port="$1"
+  lsof -i :"$port" | grep -q LISTEN 2>/dev/null
+}
+
+# 等待 dev server 端口就绪（最多 60s）
+_wait_dev_server() {
+  local port="$1"
+  local elapsed=0
+  while [ $elapsed -lt 60 ]; do
+    if _dev_server_running "$port"; then
+      return 0
+    fi
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+  return 1
+}
+
+# 确保 dev server 已启动，返回访问 URL
+# 返回值（stdout）: http://localhost:{PORT}
+# 返回码: 0=成功 1=失败
+ensure_dev_server() {
+  local feature_name="$1"
+  local port
+  port=$(_detect_dev_port)
+  local base_url="http://localhost:${port}"
+
+  if _dev_server_running "$port"; then
+    echo "  [dev-server] 已在端口 $port 运行" >&2
+    notify "dev server 已在 $base_url 运行" "$feature_name"
+    echo "$base_url"
+    return 0
+  fi
+
+  echo "  [dev-server] 未检测到运行中的 dev server，尝试启动..." >&2
+  local log_file="/tmp/devserver-${feature_name}.log"
+
+  # 后台启动
+  nohup npm --prefix "$PROJECT_ROOT" run dev \
+    > "$log_file" 2>&1 &
+
+  echo "  [dev-server] 等待端口 $port 就绪（最多 60s）..." >&2
+  if _wait_dev_server "$port"; then
+    echo "  [dev-server] 启动成功: $base_url" >&2
+    notify "dev server 已启动: $base_url\n日志: $log_file" "$feature_name"
+    echo "$base_url"
+    return 0
+  else
+    echo "  [dev-server] ❌ 启动超时（60s）" >&2
+    agent_notify \
+      "需求 '$feature_name' 的 dev server 启动失败，日志: $log_file" \
+      "请手动启动 dev server 后执行 /resume $feature_name 继续" \
+      "$feature_name"
+    return 1
+  fi
+}
+
+# ============================================================
+# Step 2a: Antigravity UI 还原（显式两阶段：先 antigravity，再 claude-code）
+# ============================================================
+
+# 提取 tasks.md 中所有 antigravity 任务的字段值
+# 用法: extract_task_field <tasks_file> <task_number> <field>
+extract_task_field() {
+  local tasks_file="$1"
+  local task_num="$2"
+  local field="$3"
+  # 提取从 ### Task {N} 开始到下一个 ### Task 之间的内容，再取字段值
+  awk "/^### Task ${task_num}[：:]/,/^### Task [0-9]/" "$tasks_file" 2>/dev/null \
+    | grep "^- ${field}:" \
+    | head -1 \
+    | sed "s/^- ${field}:[[:space:]]*//"
+}
+
+# 执行单个 antigravity 任务的分块还原
+# 返回: 0=通过(包括人工确认) 1=失败
+step2a_restore_task() {
+  local feature_name="$1"
+  local task_num="$2"
+  local base_url="$3"
+  local tasks_file="$PROJECT_ROOT/specs/$feature_name/tasks.md"
+  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  local score_threshold="${UI_RESTORE_SCORE_THRESHOLD:-8}"
+  local report_batch="${UI_RESTORE_REPORT_BATCH_SIZE:-3}"
+
+  local figma_url preview_route file_path task_name
+  figma_url=$(extract_task_field "$tasks_file" "$task_num" "figma")
+  preview_route=$(extract_task_field "$tasks_file" "$task_num" "预览路由")
+  file_path=$(extract_task_field "$tasks_file" "$task_num" "文件范围" | tr -d '`')
+  task_name=$(awk "/^### Task ${task_num}[：:]/{print; exit}" "$tasks_file" \
+    | sed 's/^### Task [0-9]*[：:][[:space:]]*//')
+
+  echo "  [ui-restorer] Task $task_num: $task_name" >&2
+  echo "  [ui-restorer] figma=$figma_url route=$preview_route file=$file_path" >&2
+
+  # 导航到预览页面
+  local page_url="${base_url}${preview_route}"
+  local cdp_target
+  cdp_target=$(node "$PROJECT_ROOT/scripts/cdp.mjs" list 2>/dev/null \
+    | grep -i "localhost:${base_url##*:}" | head -1 | awk '{print $1}' || echo "")
+
+  if [ -n "$cdp_target" ]; then
+    node "$PROJECT_ROOT/scripts/cdp.mjs" nav "$cdp_target" "$page_url" >/dev/null 2>&1 || true
+    sleep 2  # 等待页面渲染
+  fi
+
+  # 读取分块策略
+  local blocks_raw
+  blocks_raw=$(awk "/^### Task ${task_num}[：:]/,/^### Task [0-9]/" "$tasks_file" 2>/dev/null \
+    | grep "^  - 块" | sed 's/^  - //')
+  local block_total
+  block_total=$(echo "$blocks_raw" | grep -c "块" || echo 1)
+
+  echo "  [ui-restorer] 检测到 $block_total 个还原分块" >&2
+
+  # 读取设计规格（整块提取）
+  local design_spec
+  design_spec=$(awk "/^### Task ${task_num}[：:]/,/^### Task [0-9]/" "$tasks_file" 2>/dev/null \
+    | awk '/^- 设计规格：/,/^- [^ ]/' \
+    | grep -v "^- 还原策略" | grep -v "^- 指令")
+
+  local block_results=()   # 记录每块结果 "block_name:score:screenshot"
+  local needs_review=()    # 记录需人工确认的块
+  local block_idx=0
+
+  while IFS= read -r block_line; do
+    [ -z "$block_line" ] && continue
+    block_idx=$((block_idx + 1))
+    local block_name="${block_line#*: }"
+
+    echo "  [ui-restorer] 分块 $block_idx/$block_total: $block_name" >&2
+    notify "🎨 UI 还原 Task $task_num 块 $block_idx/$block_total: $block_name" "$feature_name"
+
+    local screenshot_base="/tmp/ui-restore-${feature_name}-task${task_num}-block${block_idx}"
+    local score=0
+    local diff_complexity="major"
+    local fixes=""
+    local round
+
+    for round in 1 2; do
+      echo "  [ui-restorer] Round $round..." >&2
+
+      # 选择生成模式
+      local gen_model gen_variant
+      if [ "$round" -eq 1 ] || [ "$diff_complexity" = "major" ]; then
+        gen_model="antigravity-gemini-3-pro"
+        gen_variant="high"
+      else
+        # Round 2 minor → Fast
+        gen_model="antigravity-gemini-3-flash"
+        gen_variant="minimal"
+      fi
+
+      # 调用 Antigravity 生成/修复
+      if [ "$round" -eq 1 ]; then
+        opencli antigravity send \
+          --model="$gen_model" --variant="$gen_variant" \
+          "你只负责 UI 还原，不碰业务逻辑。
+
+页面：$task_name
+当前分块：$block_name（第 $block_idx/$block_total 块）
+生成文件：$file_path
+预览路由：$preview_route
+
+设计规格（Figma MCP 已提取）：
+$design_spec
+
+项目约束：
+- 使用 src/components/ui/ 中已有的 design system 组件
+- 使用项目 CSS 变量 / Tailwind 配置
+- 响应式断点：mobile(375) / tablet(768) / desktop(1440)
+- Props 接口定义在组件顶部
+- 禁止：API 调用 / 状态管理 / 路由跳转 / 硬编码颜色 / 内联样式
+
+请生成 $block_name 的代码，写入 $file_path。" >/dev/null 2>&1 || true
+      else
+        # Round 2：带精确 diff 修复
+        opencli antigravity send \
+          --model="$gen_model" --variant="$gen_variant" \
+          "根据以下视觉 diff 精确修复 $file_path：
+
+$fixes
+
+Figma 设计规格参考：
+$design_spec
+
+只修改与 diff 相关的代码，不要重写其他部分。" >/dev/null 2>&1 || true
+      fi
+
+      sleep 3  # 等待热更新
+
+      # 截图
+      local screenshot="${screenshot_base}-round${round}.png"
+      if [ -n "$cdp_target" ]; then
+        node "$PROJECT_ROOT/scripts/cdp.mjs" shot "$cdp_target" "$screenshot" >/dev/null 2>&1 || true
+      fi
+
+      # Antigravity Pro 模式视觉打分
+      local score_output
+      score_output=$(opencli antigravity send \
+        --model="antigravity-gemini-3-pro" \
+        "请对比以下两张图，评估 UI 还原质量：
+
+图1（Figma 设计稿）：通过 Figma MCP 打开 $figma_url，查看 $block_name 区域
+图2（当前渲染截图）：[附图: $screenshot]
+
+评估维度：
+1. 整体布局结构是否一致
+2. 间距/padding/margin 是否准确
+3. 颜色/字体/字号是否匹配
+4. 组件细节（圆角/阴影/边框）是否还原
+5. 响应式是否正确
+
+严格按以下格式输出，不要有其他文字：
+SCORE: {1-10}
+DIFF_COMPLEXITY: minor|major
+FIXES:
+  - {元素.属性: 实际值 → 设计值}
+PASS: true|false" 2>/dev/null || echo "SCORE: 0
+DIFF_COMPLEXITY: major
+FIXES:
+  - 截图获取失败，跳过视觉打分
+PASS: false")
+
+      # 解析打分结果
+      score=$(echo "$score_output" | grep "^SCORE:" | sed 's/SCORE:[[:space:]]*//' | tr -d ' \r')
+      diff_complexity=$(echo "$score_output" | grep "^DIFF_COMPLEXITY:" | sed 's/DIFF_COMPLEXITY:[[:space:]]*//' | tr -d ' \r')
+      fixes=$(echo "$score_output" | awk '/^FIXES:/,/^PASS:/' | grep -v "^FIXES:\|^PASS:")
+      local pass_val
+      pass_val=$(echo "$score_output" | grep "^PASS:" | sed 's/PASS:[[:space:]]*//' | tr -d ' \r')
+
+      is_numeric "$score" || score=0
+      echo "  [ui-restorer] 块 $block_idx Round $round 得分: $score/10 (PASS=$pass_val)" >&2
+
+      if [ "$pass_val" = "true" ] || [ "$score" -ge "$score_threshold" ]; then
+        block_results+=("${block_name}:${score}:${screenshot}")
+        echo "  [ui-restorer] 块 $block_idx PASS (${score}/10)" >&2
+        break
+      fi
+
+      if [ "$round" -eq 2 ]; then
+        # 2 轮后仍不达标，加入人工确认队列
+        needs_review+=("${block_name}:${score}:${screenshot}:${fixes}")
+        block_results+=("${block_name}:${score}:${screenshot}:NEEDS_REVIEW")
+        echo "  [ui-restorer] 块 $block_idx 2轮后仍不达标(${score}/10)，等待人工确认" >&2
+      fi
+    done
+
+    # 按批次汇报（每 report_batch 块汇报一次）
+    if [ $((block_idx % report_batch)) -eq 0 ] && [ ${#block_results[@]} -gt 0 ]; then
+      _report_ui_progress "$feature_name" "$task_num" "$task_name" \
+        "$block_idx" "$block_total" "${block_results[@]}" "${needs_review[@]+"${needs_review[@]}"}"
+      needs_review=()
+    fi
+
+  done <<< "$blocks_raw"
+
+  # 最后一批汇报（余量 or 总块数 <= report_batch）
+  if [ ${#block_results[@]} -gt 0 ]; then
+    _report_ui_progress "$feature_name" "$task_num" "$task_name" \
+      "$block_total" "$block_total" "${block_results[@]}" "${needs_review[@]+"${needs_review[@]}"}"
+  fi
+
+  return 0
+}
+
+# 汇报 UI 还原进度（通过 agent_notify 发飞书）
+_report_ui_progress() {
+  local feature_name="$1"
+  local task_num="$2"
+  local task_name="$3"
+  local done_count="$4"
+  local total_count="$5"
+  shift 5
+  local results=("$@")
+
+  local pass_count=0
+  local review_lines=""
+  local screenshot_list=""
+
+  for r in "${results[@]}"; do
+    local bname bscore bshot
+    bname=$(echo "$r" | cut -d: -f1)
+    bscore=$(echo "$r" | cut -d: -f2)
+    bshot=$(echo "$r" | cut -d: -f3)
+    local status
+    status=$(echo "$r" | cut -d: -f4)
+
+    if [ "$status" != "NEEDS_REVIEW" ]; then
+      pass_count=$((pass_count + 1))
+    else
+      local bfixes
+      bfixes=$(echo "$r" | cut -d: -f5-)
+      review_lines+="─ ${bname}：当前得分 ${bscore}/10\n  主要问题：${bfixes}\n  截图：${bshot}\n"
+    fi
+    [ -n "$bshot" ] && screenshot_list+="  ${bshot}\n"
+  done
+
+  local context
+  context="UI 还原进度 — Task ${task_num}: ${task_name}
+
+已完成：${done_count}/${total_count} 块
+自动通过（≥${UI_RESTORE_SCORE_THRESHOLD:-8}分）：${pass_count}/${#results[@]} 块
+
+$([ -n "$review_lines" ] && echo "需确认的分块：
+$review_lines" || echo "所有分块已自动通过 ✅")
+
+截图路径：
+$screenshot_list"
+
+  local question="请查看截图后回复：
+1. 满意 → 回复「继续」
+2. 不满意 → 描述具体问题（如：按钮颜色偏蓝/间距太大），我会让 Antigravity 重新修复"
+
+  agent_notify "$context" "$question" "$feature_name"
+}
+
+# 顺序执行开发任务（显式两阶段：Step 2a antigravity → Step 2b claude-code）
 step2_sequential() {
   local feature_name="$1"
   local model="$2"
   local tasks_file="$PROJECT_ROOT/specs/$feature_name/tasks.md"
 
-  # 检查是否有 antigravity 任务需要 ui-restorer
   local has_antigravity
   has_antigravity=$(count_pattern_in_file "agent: antigravity" "$tasks_file")
 
+  # ── Step 2a: Antigravity UI 还原（显式优先执行）──
   if [ "$has_antigravity" -gt 0 ] && [ "${ENABLE_UI_RESTORER:-false}" = "true" ]; then
-    echo "  [ui-restorer] 检测到 $has_antigravity 个 antigravity 任务"
-    # 先执行 antigravity 任务（UI 还原）
-    opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
-      Read $PROJECT_ROOT/.claude/extensions/ui-restorer/SKILL.md
-      Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
-      Read $tasks_file
-      Read $PROJECT_ROOT/.claude/CLAUDE.md
-      Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
-      $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant company skills from $PROJECT_ROOT/.claude/company-skills/")
+    echo "  [Step 2a] 检测到 $has_antigravity 个 antigravity 任务，开始 UI 还原" >&2
+    notify "🎨 Step 2a: 开始 UI 还原 ($has_antigravity 个任务)" "$feature_name"
 
-      Execute development with agent routing:
-      1. For tasks marked 'agent: antigravity': use ui-restorer extension (Antigravity + Figma MCP)
-      2. For tasks marked 'agent: claude-code' or no agent tag: execute with Claude Code
-      3. Respect task dependencies — execute in order
-      4. Mark each task as done in tasks.md after completion
-    "
-  else
-    if [ "$has_antigravity" -gt 0 ]; then
-      echo "  ⚠️ 发现 antigravity 任务但 ENABLE_UI_RESTORER 未启用，使用 Claude Code 执行"
+    # Phase 0: 确保 dev server 运行
+    local base_url
+    base_url=$(ensure_dev_server "$feature_name") || return 1
+
+    # 逐个执行 antigravity 任务
+    local task_nums
+    task_nums=$(grep -n "agent: antigravity" "$tasks_file" 2>/dev/null \
+      | while read -r line; do
+          local lineno="${line%%:*}"
+          # 往上找最近的 ### Task N
+          awk "NR<=$lineno" "$tasks_file" \
+            | grep "^### Task [0-9]" | tail -1 \
+            | grep -o "[0-9]*" | head -1
+        done | sort -un)
+
+    for task_num in $task_nums; do
+      step2a_restore_task "$feature_name" "$task_num" "$base_url" || {
+        echo "  ⚠️ Task $task_num 还原失败，继续下一个" >&2
+      }
+    done
+
+    notify "✅ Step 2a 完成: UI 还原结束，开始 Phase 3 Codex 审查" "$feature_name"
+
+    # Phase 3: Codex 代码规范审查（一轮）
+    echo "  [Step 2a] Phase 3: Codex 代码规范审查..." >&2
+    if command -v codex >/dev/null 2>&1; then
+      local changed_files
+      changed_files=$(git -C "$PROJECT_ROOT" diff --name-only HEAD 2>/dev/null || echo "")
+      codex exec --full-auto "
+审查 Antigravity 生成的 UI 代码（代码规范审查，非视觉审查）。
+
+变更文件：
+$changed_files
+
+审查清单：
+1. 是否有硬编码颜色/字号/间距（必须使用 design token / CSS 变量）
+2. 是否重复造轮子（项目已有的 design system 组件是否被正确使用）
+3. Props 接口是否合理（纯 UI 组件不应依赖业务类型）
+4. 是否有不必要的 div 嵌套（超过 4 层需说明）
+5. 所有交互元素是否有 aria-label 或 alt 文本（a11y）
+6. 表单元素是否有 label 关联
+7. 图片是否使用 lazy loading
+8. 组件命名是否符合项目规范
+
+输出格式：
+CODEX_VERDICT: PASS|FAIL
+ISSUES:
+  - SEVERITY: WARNING|ERROR
+    FILE: {文件路径}
+    LINE: {行号}
+    ISSUE: {问题描述}
+    FIX: {修复建议}
+      " > "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null || true
+
+      local codex_verdict
+      codex_verdict=$(grep "^CODEX_VERDICT:" \
+        "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null \
+        | sed 's/CODEX_VERDICT:[[:space:]]*//' | tr -d ' \r')
+
+      if [ "$codex_verdict" = "FAIL" ]; then
+        local error_issues
+        error_issues=$(grep -A3 "SEVERITY: ERROR" \
+          "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null || echo "")
+        if [ -n "$error_issues" ]; then
+          echo "  [Step 2a] Codex 发现 ERROR 级问题，触发 Antigravity 修复..." >&2
+          opencli antigravity send \
+            --model="antigravity-gemini-3-flash" --variant="minimal" \
+            "修复以下代码规范问题：
+$error_issues
+严格按 FIX 建议修改，不要改其他代码。" >/dev/null 2>&1 || true
+        fi
+        local warning_issues
+        warning_issues=$(grep -A3 "SEVERITY: WARNING" \
+          "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null || echo "")
+        [ -n "$warning_issues" ] && \
+          notify "⚠️ UI Codex 审查警告（不阻塞）:\n$warning_issues" "$feature_name"
+      fi
+    else
+      echo "  ⚠️ codex 未安装，跳过 UI 代码规范审查" >&2
     fi
-    # 正常 Claude Code 顺序执行
-    opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
-      Read $tasks_file
-      Read $PROJECT_ROOT/.claude/CLAUDE.md
-      Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
-      Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
-      $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant company skills from $PROJECT_ROOT/.claude/company-skills/")
 
-      Execute all tasks in tasks.md sequentially.
-      Follow task dependencies. Mark each task as done after completion.
-    "
+    notify "✅ Step 2a 全部完成: UI 还原 + Codex 审查通过" "$feature_name"
+  elif [ "$has_antigravity" -gt 0 ]; then
+    echo "  ⚠️ 发现 antigravity 任务但 ENABLE_UI_RESTORER 未启用，使用 Claude Code 执行" >&2
   fi
+
+  # ── Step 2b: claude-code 任务（业务逻辑，依赖 2a 产出）──
+  echo "  [Step 2b] 执行 claude-code 任务..." >&2
+  notify "💻 Step 2b: 开始业务逻辑开发" "$feature_name"
+
+  opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
+    Read $tasks_file
+    Read $PROJECT_ROOT/.claude/CLAUDE.md
+    Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
+    Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
+    $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant company skills from $PROJECT_ROOT/.claude/company-skills/")
+
+    Execute all tasks marked 'agent: claude-code' (or with no agent tag) in tasks.md.
+    Skip tasks marked 'agent: antigravity' (already completed in Step 2a).
+    Follow task dependencies. Mark each task as done after completion.
+  " >&2
 }
 
 # ============================================================
@@ -1231,10 +1690,16 @@ run_pipeline_steps_2_to_7() {
   log "STEP_4_START: 测试 ($feature_name)" "$pipeline_log"
   step4_test "$feature_name" || {
     echo "  ⚠️ 测试失败，进入自动修复回路"
-    notify "⚠️ Step 4 失败: $feature_name — 进入自动修复回路"
+    agent_notify \
+      "需求 '$feature_name' 的测试（Step 4）失败，正在进入自动修复回路，我会尝试自动修复后重跑测试。" \
+      "如果自动修复失败我会再通知你，你可以随时发 /status 查看进展。" \
+      "$feature_name"
     step4_fix_and_retry "$feature_name" || {
       echo "  ❌ 自动修复回路失败，流水线终止"
-      notify "❌ 自动修复回路失败: $feature_name"
+      agent_notify \
+        "需求 '$feature_name' 的自动修复回路也失败了，无法自动解决测试问题，流水线已终止。详见 specs/$feature_name/test-report.md。" \
+        "需要我帮你分析失败原因吗？还是你来人工修复后执行 /resume $feature_name 继续？" \
+        "$feature_name"
       log "STEP_4_FAILED: $(($(date +%s) - step_start))s" "$pipeline_log"
       return 1
     }
@@ -1347,6 +1812,313 @@ cmd_rollback() {
 }
 
 # ============================================================
+# /pause 命令：手动暂停工作流，保存断点和 requirements.md 快照
+# ============================================================
+cmd_pause() {
+  local feature_name="$1"
+  local pipeline_log="$PROJECT_ROOT/specs/.workflow-log"
+
+  if [ -z "$feature_name" ]; then
+    feature_name=$(detect_feature_name)
+  fi
+  if [ -z "$feature_name" ]; then
+    echo "❌ 未找到活跃的需求。用法: /pause {需求名称}"
+    return 1
+  fi
+  if ! validate_feature_name "$feature_name"; then
+    echo "❌ 非法的 feature name: $feature_name"
+    return 1
+  fi
+
+  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  if [ ! -d "$spec_dir" ]; then
+    echo "❌ 未找到 specs 目录: $spec_dir"
+    return 1
+  fi
+
+  # 防止重复暂停
+  if has_paused_state "$feature_name"; then
+    local already_at
+    already_at=$(get_paused_field "$feature_name" "paused_at")
+    echo "⚠️ '$feature_name' 已处于暂停状态（暂停于 $already_at）"
+    echo "   修改需求后执行: /restart $feature_name"
+    return 0
+  fi
+
+  # 从 workflow-log 计算断点（下一个未完成的 Step）
+  local last_done_step=1
+  if [ -f "$pipeline_log" ]; then
+    for step in 2 3 4 5 6 7; do
+      if grep -q "STEP_${step}_DONE" "$pipeline_log" 2>/dev/null; then
+        last_done_step=$step
+      fi
+    done
+  fi
+  local paused_step=$((last_done_step + 1))
+
+  # 快照 requirements.md
+  local req_file="$spec_dir/requirements.md"
+  local snapshot_file="$spec_dir/requirements.md.snapshot"
+  if [ -f "$req_file" ]; then
+    cp "$req_file" "$snapshot_file"
+    echo "  [pause] requirements.md 快照已保存" >&2
+  else
+    echo "  ⚠️ 未找到 requirements.md，快照跳过" >&2
+  fi
+
+  # 写入 paused.json
+  jq -n \
+    --arg feature "$feature_name" \
+    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson ps "$paused_step" \
+    --argjson ls "$last_done_step" \
+    '{feature:$feature,status:"paused",paused_at:$ts,paused_step:$ps,last_done_step:$ls,requirements_snapshot:"requirements.md.snapshot"}' \
+    > "$spec_dir/paused.json"
+
+  log "PIPELINE_PAUSED_BY_USER: $feature_name at step $paused_step" "$pipeline_log"
+  notify "⏸️ 工作流已手动暂停 (断点 Step $paused_step): $feature_name"
+  echo "⏸️ 已暂停 '$feature_name'（断点 Step $paused_step）"
+  echo "   - 如需改需求: 编辑 specs/$feature_name/requirements.md，然后 /restart $feature_name"
+  echo "   - 不改需求:  直接 /restart $feature_name"
+}
+
+# ============================================================
+# restart 专用：增量更新 requirements.md → design.md + tasks.md
+# 返回值: 0=无变更或更新完成  2=再次遇到[UNCERTAIN]暂停
+# ============================================================
+step1_restart_with_diff() {
+  local feature_name="$1"
+  local paused_step="$2"
+  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  local req_file="$spec_dir/requirements.md"
+  local snapshot_file="$spec_dir/requirements.md.snapshot"
+  local pipeline_log="$PROJECT_ROOT/specs/.workflow-log"
+  local model
+  model=$(select_model "low")
+
+  # 计算 diff
+  local diff_output
+  diff_output=$(diff "$snapshot_file" "$req_file" 2>/dev/null || true)
+
+  if [ -z "$diff_output" ]; then
+    echo "  [restart] requirements.md 无变更，直接从 Step $paused_step 继续" >&2
+    notify "▶️ 需求无变更，从 Step $paused_step 继续: $feature_name"
+    log "PIPELINE_RESTART_NO_CHANGE: $feature_name from Step $paused_step" "$pipeline_log"
+    return 0
+  fi
+
+  echo "  [restart] 检测到 requirements.md 变更，进入增量更新流程" >&2
+  notify "🔄 需求有变更，开始增量更新 spec: $feature_name"
+  log "PIPELINE_RESTART_WITH_DIFF: $feature_name" "$pipeline_log"
+
+  # Stage 1a'：模型润色规范化用户手改的 requirements.md
+  echo "  [Stage 1a'] 规范化 requirements.md..." >&2
+  opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
+    Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
+    Read $PROJECT_ROOT/.claude/CLAUDE.md
+    Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
+    Read $PROJECT_ROOT/.claude/SECURITY.md
+    Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
+    Read $spec_dir/requirements.md
+
+    以下是用户对 requirements.md 的变更 diff（快照 → 当前版本）：
+    ---DIFF START---
+    $diff_output
+    ---DIFF END---
+
+    任务（Stage 1a'）：
+    - 仅覆写 specs/$feature_name/requirements.md
+    - 保留用户的所有意图和新增内容，不做删减
+    - 补全格式：标准 Markdown 结构、验收标准、边界说明
+    - 对仍不确定的需求项打上 [UNCERTAIN] 标记并写入开放问题 section
+    - 不要生成或修改 design.md、tasks.md
+  " >&2
+
+  # 检测 [UNCERTAIN]
+  local open_questions
+  open_questions=$(extract_open_questions "$feature_name")
+  if [ -n "$open_questions" ]; then
+    local oq_count
+    oq_count=$(echo "$open_questions" | grep -c "." || echo 0)
+    echo "  [restart] 检测到 $oq_count 个 [UNCERTAIN]，暂停询问用户" >&2
+    save_clarification_state "$feature_name" "restart-diff" "$open_questions"
+    notify_open_questions "$feature_name" "$open_questions"
+    log "STEP_1_PAUSED: $feature_name ($oq_count 开放问题，restart)" "$pipeline_log"
+    return 2
+  fi
+
+  # Stage 1b'：最小粒度更新 design.md + tasks.md
+  echo "  [Stage 1b'] 增量更新 design.md + tasks.md..." >&2
+  local complexity
+  complexity=$(get_complexity "$feature_name")
+  local stage1b_model
+  stage1b_model=$(select_model "$complexity")
+
+  opencli claude --print --permission-mode bypassPermissions --model "$stage1b_model" -p "
+    Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
+    Read $PROJECT_ROOT/.claude/CLAUDE.md
+    Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
+    Read $PROJECT_ROOT/.claude/SECURITY.md
+    Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
+    Read $spec_dir/requirements.md
+    Read $spec_dir/design.md
+    Read $spec_dir/tasks.md
+
+    以下是 requirements.md 相对快照的变更 diff：
+    ---DIFF START---
+    $diff_output
+    ---DIFF END---
+
+    任务（Stage 1b'）：
+    - 以最小粒度更新 design.md 和 tasks.md，仅修改与 diff 相关的部分
+    - 未受 diff 影响的设计决策和任务条目保持原样，不要重写
+    - 新增需求 → 追加对应 design 章节和 task 条目
+    - 删除需求 → 移除对应内容
+    - 修改需求 → 就地更新受影响部分
+    - 更新两个文件 status 标记为 reviewed
+  " >&2
+
+  log "STEP_1_DONE: $feature_name (restart with diff)" "$pipeline_log"
+  notify "✅ 增量 spec 更新完成: $feature_name"
+  return 0
+}
+
+# ============================================================
+# /restart 命令：从 paused 状态恢复，智能判断需求变更
+# ============================================================
+cmd_restart() {
+  local feature_name="$1"
+  local pipeline_log="$PROJECT_ROOT/specs/.workflow-log"
+
+  if [ -z "$feature_name" ]; then
+    feature_name=$(detect_feature_name)
+  fi
+  if [ -z "$feature_name" ]; then
+    echo "❌ 未找到活跃的需求。用法: /restart {需求名称}"
+    return 1
+  fi
+  if ! validate_feature_name "$feature_name"; then
+    echo "❌ 非法的 feature name: $feature_name"
+    return 1
+  fi
+
+  # 优先检查是否有待澄清状态（避免与 paused.json 产生歧义）
+  if has_pending_clarification "$feature_name"; then
+    echo "⚠️ '$feature_name' 处于等待澄清状态，请先用 /answer 回复问题后再 /restart"
+    return 1
+  fi
+
+  if ! has_paused_state "$feature_name"; then
+    echo "❌ '$feature_name' 不处于 paused 状态"
+    echo "   提示: 先用 /pause $feature_name 暂停工作流"
+    return 1
+  fi
+
+  local paused_step
+  paused_step=$(get_paused_field "$feature_name" "paused_step")
+  local paused_at
+  paused_at=$(get_paused_field "$feature_name" "paused_at")
+
+  echo "  [restart] '$feature_name' 暂停于 $paused_at，断点 Step $paused_step" >&2
+  notify "🔄 开始重启工作流: $feature_name (断点 Step $paused_step)"
+  log "PIPELINE_RESTART_START: $feature_name from Step $paused_step" "$pipeline_log"
+
+  # 检查快照是否存在
+  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  local snapshot_file="$spec_dir/requirements.md.snapshot"
+  if [ ! -f "$snapshot_file" ]; then
+    echo "  ⚠️ 未找到 requirements.md.snapshot，跳过 diff，直接从断点继续" >&2
+    rm -f "$spec_dir/paused.json"
+    cmd_resume "$feature_name"
+    return $?
+  fi
+
+  # 增量更新（有变更）或直接继续（无变更）
+  step1_restart_with_diff "$feature_name" "$paused_step"
+  local diff_result=$?
+
+  if [ $diff_result -eq 2 ]; then
+    # 再次遇到 [UNCERTAIN]，保留 paused.json 等用户 /answer 后再 /restart
+    echo "⏸️ 需求变更中仍有未确认问题，已暂停"
+    echo "   请用 /answer $feature_name 回复后，再次执行 /restart $feature_name"
+    return 0
+  fi
+
+  # 消费 paused.json + 快照
+  rm -f "$spec_dir/paused.json" "$spec_dir/requirements.md.snapshot"
+  log "PIPELINE_PAUSED_STATE_CLEARED: $feature_name" "$pipeline_log"
+
+  notify "▶️ 从 Step $paused_step 继续工作流: $feature_name"
+  log "PIPELINE_RESTART_RESUME: $feature_name from Step $paused_step" "$pipeline_log"
+
+  case "$paused_step" in
+    2) run_pipeline_steps_2_to_7 "$feature_name" ;;
+    3) step3_review "$feature_name" && step4_test "$feature_name" && step5_doc_sync "$feature_name" && step6_deploy "$feature_name" && step7_notify "$feature_name" ;;
+    4) step4_test "$feature_name" && step5_doc_sync "$feature_name" && step6_deploy "$feature_name" && step7_notify "$feature_name" ;;
+    5) step5_doc_sync "$feature_name" && step6_deploy "$feature_name" && step7_notify "$feature_name" ;;
+    6) step6_deploy "$feature_name" && step7_notify "$feature_name" ;;
+    7) step7_notify "$feature_name" ;;
+    *) echo "✅ '$feature_name' 所有 Step 均已完成，无需继续" ;;
+  esac
+}
+
+# ============================================================
+# /resume 命令：从断点继续工作流
+# 从 workflow-log 找最后一个未完成的 Step，从那里继续
+# ============================================================
+cmd_resume() {
+  local feature_name="$1"
+  local pipeline_log="$PROJECT_ROOT/specs/.workflow-log"
+
+  # 若未指定 feature，自动检测
+  if [ -z "$feature_name" ]; then
+    feature_name=$(detect_feature_name)
+  fi
+  if [ -z "$feature_name" ]; then
+    echo "❌ 未找到活跃的需求。用法: /resume {需求名称}"
+    echo "   提示: 用 /status 查看当前活跃需求"
+    return 1
+  fi
+
+  # 若处于等待澄清状态，提示用 /answer
+  if has_pending_clarification "$feature_name"; then
+    local questions
+    questions=$(get_clarification_field "$feature_name" "questions")
+    echo "⏸️ '$feature_name' 正在等待需求澄清，请用 /answer 回复："
+    echo "$questions"
+    echo ""
+    echo "用法: /answer $feature_name 1.你的答案 2.你的答案"
+    return 0
+  fi
+
+  # 从 workflow-log 判断断点
+  local last_done_step=1
+  if [ -f "$pipeline_log" ]; then
+    for step in 2 3 4 5 6 7; do
+      if grep -q "STEP_${step}_DONE" "$pipeline_log" 2>/dev/null; then
+        last_done_step=$step
+      fi
+    done
+  fi
+
+  local resume_from=$((last_done_step + 1))
+
+  notify "▶️ 从 Step $resume_from 恢复工作流: $feature_name"
+  echo "  [resume] 从 Step $resume_from 继续: $feature_name" >&2
+  log "PIPELINE_RESUME: $feature_name from Step $resume_from" "$pipeline_log"
+
+  case "$resume_from" in
+    2) run_pipeline_steps_2_to_7 "$feature_name" ;;
+    3) step3_review "$feature_name" && step4_test "$feature_name" && step5_doc_sync "$feature_name" && step6_deploy "$feature_name" && step7_notify "$feature_name" ;;
+    4) step4_test "$feature_name" && step5_doc_sync "$feature_name" && step6_deploy "$feature_name" && step7_notify "$feature_name" ;;
+    5) step5_doc_sync "$feature_name" && step6_deploy "$feature_name" && step7_notify "$feature_name" ;;
+    6) step6_deploy "$feature_name" && step7_notify "$feature_name" ;;
+    7) step7_notify "$feature_name" ;;
+    *) echo "✅ '$feature_name' 流水线已全部完成，无需恢复" ;;
+  esac
+}
+
+# ============================================================
 # /answer 命令：用户提供澄清答复，恢复暂停的工作流
 # ============================================================
 cmd_answer_clarification() {
@@ -1380,7 +2152,7 @@ cmd_answer_clarification() {
   notify "▶️ 收到澄清，重新生成 spec: $feature_name"
   log "STEP_1_RESUME: $feature_name (用户提供澄清)" "$PROJECT_ROOT/specs/.workflow-log"
 
-  # 重新运行 Stage 1（融入用户澄清上下文）
+  # Stage 1a 恢复：仅更新 requirements.md（融入用户澄清，design/tasks 尚未生成）
   local model
   model=$(select_model "low")
   opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
@@ -1390,16 +2162,18 @@ cmd_answer_clarification() {
     Read $PROJECT_ROOT/.claude/SECURITY.md
     Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
     $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
+    Read $PROJECT_ROOT/specs/$feature_name/requirements.md
 
-    用户已为开放问题提供澄清，请覆写 specs/$feature_name/ 下的三个文档：
+    用户已为开放问题提供澄清，请仅覆写 specs/$feature_name/requirements.md：
     原始需求: $original_input
     用户澄清答复: $answers
 
     要求：
     - 已解答的开放问题从 [ ] 改为 [x]
-    - 根据澄清内容更新 requirements.md、design.md、tasks.md
+    - 根据澄清内容更新 requirements.md
     - 仍有不确定的项保留 [ ]（不要强行推断）
-    Execute spec-writer Stage 1 with clarification context.
+    - 不要生成或修改 design.md、tasks.md
+    Execute spec-writer Stage 1a with clarification context.
   " >&2
 
   # 清理状态文件（答复已消费）
@@ -1417,6 +2191,19 @@ cmd_answer_clarification() {
     log "STEP_1_PAUSED: $feature_name ($rq_count 开放问题，第2轮)" "$PROJECT_ROOT/specs/.workflow-log"
     return 0
   fi
+
+  # Stage 1b：requirements.md 已确认，生成 design.md + tasks.md
+  echo "  [Stage 1b] 澄清完成，生成 design.md + tasks.md..." >&2
+  opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
+    Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
+    Read $PROJECT_ROOT/.claude/CLAUDE.md
+    Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
+    Read $PROJECT_ROOT/.claude/SECURITY.md
+    Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
+    $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
+    Read $PROJECT_ROOT/specs/$feature_name/requirements.md
+    Execute spec-writer Stage 1b: generate design.md + tasks.md based on the confirmed requirements.md above.
+  " >&2
 
   # 无剩余开放问题，继续 Stages 2+3，然后 Steps 2-7
   notify "✅ 澄清完成，继续 Stage 2+3: $feature_name"
@@ -1513,6 +2300,15 @@ if [[ "$MSG_TEXT" == /* ]]; then
     /answer)
       cmd_answer_clarification "$ARGS"
       ;;
+    /pause)
+      cmd_pause "$ARGS"
+      ;;
+    /restart)
+      cmd_restart "$ARGS"
+      ;;
+    /resume)
+      cmd_resume "$ARGS"
+      ;;
     /status)
       echo "=== Git Log ==="
       git -C "$PROJECT_ROOT" log --oneline -10
@@ -1529,7 +2325,7 @@ if [[ "$MSG_TEXT" == /* ]]; then
       ;;
     *)
       echo "Unknown command: $COMMAND"
-      echo "Available: /workflow /hotfix /review /test /answer /deploy /rollback /status"
+      echo "Available: /workflow /hotfix /review /test /answer /pause /restart /resume /deploy /rollback /status"
       ;;
   esac
 else

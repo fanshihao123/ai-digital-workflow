@@ -53,6 +53,9 @@ ENABLE_WORKTREE_PARALLEL=true   # complexity:high 时多 Agent 并行
 ENABLE_DEPLOY=true              # 部署执行 + 健康检查 + 回滚
 
 # 以下有配置则自动启用，无配置则跳过
+FEISHU_NOTIFY_TARGET=ou_xxx     # openclaw 主动通知目标（飞书 open_id 或群 chat_id）
+                                 # 获取方式：openclaw directory peers list --channel feishu --query "你的名字"
+FEISHU_WEBHOOK_URL=xxx          # fallback webhook（FEISHU_NOTIFY_TARGET 未配置时使用）
 FEISHU_APPROVAL_CODE=xxx        # 飞书审批门控（安全+部署）
 JIRA_BASE_URL=xxx               # Jira 双向同步
 JIRA_TOKEN=xxx
