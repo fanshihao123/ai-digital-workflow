@@ -253,6 +253,32 @@ SCORE < 8 → 人工确认节点（agent_notify 发飞书附截图）
 
 覆盖率阈值：Statements 80%、Branches 75%、Functions 80%。**特性范围测试与全仓库历史债务分离**——新特性测试必须通过，历史债务不阻塞新功能。
 
+## Recent Improvements (2026-03-31)
+
+### Pause 安全机制强化
+- **`ensure_not_paused()` 守卫**: Step 2~7 及 `run_pipeline_steps_2_to_7` 入口各加检查，已 paused 的 feature 立即停止推进，不会继续执行后续 Step
+- **`terminate_feature_pipeline_processes()`**: `/pause` 触发时主动 kill 当前 feature 的活跃 pipeline 进程（排除 `/pause` 自身）
+
+### 测试范围精准化（feature-scope 优先）
+- **`extract_feature_scopes` git diff 兜底**: tasks.md 没有 `文件范围` 声明时，自动从 `git diff --name-only HEAD` 推断本次实际变更的源文件（排除 `.test.`/`__tests__` 文件）
+- **`extract_feature_tests` 扩展候选路径**: 新增扫描 `scope_dir/__tests__/` 同级目录，覆盖 `src/components/__tests__/Foo.test.tsx` 等常见结构
+- **多路径测试入口**: 按优先级依次尝试 Playwright e2e → vitest feature-scope → `npm test` fallback，不再因缺少 vitest 配置而直接报 blocker
+- **lint 只检测变更文件**: `git diff --name-only HEAD` 拿变更的 ts/tsx/js/jsx 文件，直接传给 `npm run lint -- <files>`；无变更文件时兜底全量 lint。typecheck 仍全量（tsc 需完整类型图）
+
+### 代码审查结果解析增强
+- **fallback 报告改为 FAIL**: 审查工具执行失败时 `FINAL_VERDICT` 改为 `FAIL`（原为 PASS），避免静默通过
+- **三字段联合判断**: 同时读取 `ROUND_1_STATUS` + `ROUND_2_STATUS` + `FINAL_VERDICT`，三者都 PASS 才算通过
+
+### `/restart` 断点逻辑优化
+- **断点 ≥ Step 3 跳过 spec diff**: 断点在执行态（Step 3+）时直接从对应 Step 继续，不再回到 requirements diff 阶段
+- **requirements diff 过滤元信息噪音**: 忽略 `状态/更新时间/审查状态` 等元信息行，只比较实质需求变更
+
+### `detect_feature_name` 改进
+- 综合扫描 `requirements/design/tasks/awaiting-clarification.json` 四类文件的最近修改时间判断活跃 feature，避免只看 tasks.md 导致旧 feature 误判
+
+### 开发收尾自动格式化
+- Step 2b 完成后对变更的 js/ts/json/md/css 文件运行 `npx prettier --write`，模拟 VS Code command+s format-on-save
+
 ## Recent Improvements (2026-03-29 v2)
 
 ### ui-restorer 全面升级（Antigravity 分块还原 + 视觉反馈闭环）

@@ -207,6 +207,40 @@ get_paused_field() {
   [ -f "$state_file" ] && jq -r ".$field // empty" "$state_file" 2>/dev/null || true
 }
 
+# 若 feature 已被 /pause，当前执行链路应尽快停止继续推进
+ensure_not_paused() {
+  local feature_name="$1"
+  local context="${2:-workflow}"
+  if has_paused_state "$feature_name"; then
+    echo "  [paused-check] '$feature_name' 已处于 paused，停止 $context" >&2
+    log "PIPELINE_STOPPED_BY_PAUSE: $feature_name ($context)" "$PROJECT_ROOT/specs/.workflow-log"
+    return 1
+  fi
+  return 0
+}
+
+# 终止指定 feature 的活跃 pipeline 进程（排除当前 /pause 自己）
+terminate_feature_pipeline_processes() {
+  local feature_name="$1"
+  local current_pid="$$"
+  local pids=""
+
+  pids=$(ps -Ao pid=,command= | awk -v feature="$feature_name" -v self="$current_pid" '
+    /feishu-handler\.sh/ && $0 !~ /\/pause / && index($0, feature) > 0 {
+      pid=$1
+      if (pid != self) print pid
+    }
+  ' 2>/dev/null || true)
+
+  [ -z "$pids" ] && return 0
+
+  echo "  [pause] 终止活跃 pipeline 进程: $(echo "$pids" | xargs)" >&2
+  while IFS= read -r pid; do
+    [ -z "$pid" ] && continue
+    kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  done <<< "$pids"
+}
+
 # 格式化开放问题并通过飞书发送给用户
 notify_open_questions() {
   local feature_name="$1"
@@ -234,10 +268,24 @@ notify_open_questions() {
 extract_feature_scopes() {
   local feature_name="$1"
   local tasks_file="$PROJECT_ROOT/specs/$feature_name/tasks.md"
+  local declared_scopes=""
 
   if [ -f "$tasks_file" ]; then
-    sed -n 's/.*文件范围：[[:space:]]*`\([^`]*\)`.*/\1/p' "$tasks_file" | awk 'NF'
+    declared_scopes=$(sed -n 's/.*文件范围：[[:space:]]*`\([^`]*\)`.*/\1/p' "$tasks_file" | awk 'NF')
   fi
+
+  if [ -n "$declared_scopes" ]; then
+    printf '%s\n' "$declared_scopes"
+    return
+  fi
+
+  # fallback：tasks.md 没有声明文件范围时，从 git diff 推断本次变更的源文件
+  # 排除测试文件本身，让 extract_feature_tests 去推断对应测试
+  git -C "$PROJECT_ROOT" diff --name-only HEAD 2>/dev/null \
+    | grep -E '\.(ts|tsx|js|jsx)$' \
+    | grep -v '\.\(test\|spec\)\.' \
+    | grep -v '__tests__' \
+    || true
 }
 
 extract_feature_tests() {
@@ -265,6 +313,14 @@ extract_feature_tests() {
       "$PROJECT_ROOT/${scope_dir}/${scope_base}.spec.ts" \
       "$PROJECT_ROOT/${scope_dir}/${scope_base}.spec.jsx" \
       "$PROJECT_ROOT/${scope_dir}/${scope_base}.spec.js" \
+      "$PROJECT_ROOT/${scope_dir}/__tests__/${scope_base}.test.tsx" \
+      "$PROJECT_ROOT/${scope_dir}/__tests__/${scope_base}.test.ts" \
+      "$PROJECT_ROOT/${scope_dir}/__tests__/${scope_base}.test.jsx" \
+      "$PROJECT_ROOT/${scope_dir}/__tests__/${scope_base}.test.js" \
+      "$PROJECT_ROOT/${scope_dir}/__tests__/${scope_base}.spec.tsx" \
+      "$PROJECT_ROOT/${scope_dir}/__tests__/${scope_base}.spec.ts" \
+      "$PROJECT_ROOT/${scope_dir}/__tests__/${scope_base}.spec.jsx" \
+      "$PROJECT_ROOT/${scope_dir}/__tests__/${scope_base}.spec.js" \
       "$PROJECT_ROOT/src/__tests__/${scope_base}.test.tsx" \
       "$PROJECT_ROOT/src/__tests__/${scope_base}.test.ts" \
       "$PROJECT_ROOT/src/__tests__/${scope_base}.spec.tsx" \
@@ -314,9 +370,12 @@ run_local_review() {
   changed_files=$(git -C "$PROJECT_ROOT" diff --name-only "${default_branch}..HEAD" 2>/dev/null || echo "")
   local diff_content
   diff_content=$(git -C "$PROJECT_ROOT" diff "${default_branch}..HEAD" 2>/dev/null || echo "")
+  local review_output=""
+  local review_exit=0
 
   # 调用 Claude Code 执行真正的两轮代码审查
-  opencli claude --model sonnet --print --permission-mode bypassPermissions -p "
+  set +e
+  review_output=$(opencli claude --model sonnet --print --permission-mode bypassPermissions -p "
     Read $PROJECT_ROOT/.claude/skills/code-reviewer/SKILL.md
     Read $PROJECT_ROOT/.claude/skills/code-reviewer/references/review-checklist.md
     Read $PROJECT_ROOT/.claude/SECURITY.md
@@ -336,27 +395,35 @@ run_local_review() {
     - ROUND_1_STATUS: PASS|FAIL
     - ROUND_2_STATUS: PASS|FAIL
     - FINAL_VERDICT: PASS|FAIL
-  " 2>&1 || {
-    # fallback: 生成基础报告
+  " 2>&1)
+  review_exit=$?
+  set -e
+
+  if [ "$review_exit" -ne 0 ]; then
     cat > "$review_report" <<EOF
 # 审查报告：$feature_name
 
 > 时间：$(date '+%Y-%m-%d %H:%M')
-> 审查工具：local fallback (Claude Code 不可用)
+> 审查工具：local fallback (Claude Code 执行失败)
 
 ## Round 1
-- 状态：SKIP（审查工具不可用）
+- 状态：FAIL（审查执行失败）
+- 输出摘要：
+\`\`\`
+$(printf '%s\n' "$review_output" | sed -n '1,60p')
+\`\`\`
 
 ## Round 2
-- 状态：SKIP（审查工具不可用）
+- 状态：SKIP（Round 1 未完成）
 
-## 结论：PASS
+## 结论：FAIL
 
-ROUND_1_STATUS: PASS
-ROUND_2_STATUS: PASS
-FINAL_VERDICT: PASS
+ROUND_1_STATUS: FAIL
+ROUND_2_STATUS: FAIL
+FINAL_VERDICT: FAIL
 EOF
-  }
+    return 1
+  fi
 
   # 检查报告格式
   if [ ! -f "$review_report" ]; then
@@ -367,9 +434,12 @@ EOF
     return 1
   fi
 
-  local final_verdict
+  local round1_status round2_status final_verdict
+  round1_status=$(sed -n 's/^ROUND_1_STATUS:[[:space:]]*//p' "$review_report" | tail -1 | tr -d '\r')
+  round2_status=$(sed -n 's/^ROUND_2_STATUS:[[:space:]]*//p' "$review_report" | tail -1 | tr -d '\r')
   final_verdict=$(sed -n 's/^FINAL_VERDICT:[[:space:]]*//p' "$review_report" | tail -1 | tr -d '\r')
-  [ "$final_verdict" = "PASS" ]
+
+  [ "$round1_status" = "PASS" ] && [ "$round2_status" = "PASS" ] && [ "$final_verdict" = "PASS" ]
 }
 
 run_local_test() {
@@ -382,15 +452,22 @@ run_local_test() {
   local repo_command="N/A"
   local e2e_command="N/A"
   local typecheck_command="N/A"
+  local lint_command="N/A"
+  local build_command="N/A"
   local feature_output=""
   local repo_output=""
   local e2e_output=""
+  local typecheck_output=""
+  local lint_output=""
+  local build_output=""
   local feature_status="FAIL"
   local full_repo_status="NOT_RUN"
   local repo_debt_status="NOT_RUN"
   local workflow_verdict="FAIL"
   local coverage_file="$PROJECT_ROOT/coverage/coverage-summary.json"
   local typecheck_status="NOT_RUN"
+  local lint_status="NOT_RUN"
+  local build_status="NOT_RUN"
   local e2e_status="NOT_RUN"
   local coverage_statements="N/A"
   local coverage_branches="N/A"
@@ -398,9 +475,12 @@ run_local_test() {
   local coverage_lines="N/A"
   local vitest_config=""
   local vitest_config_rel=""
+  local jest_config=""
   local feature_exit=1
   local repo_exit=1
   local e2e_exit=1
+  local has_feature_scope_runner="false"
+  local has_playwright_runner="false"
   local blockers=""
 
   feature_tests=$(extract_feature_tests "$feature_name")
@@ -414,18 +494,121 @@ run_local_test() {
     "$PROJECT_ROOT/vitest.config.mts" \
     "$PROJECT_ROOT/vitest.config.js" || true)
   vitest_config_rel="${vitest_config#$PROJECT_ROOT/}"
+  jest_config=$(first_existing_file \
+    "$PROJECT_ROOT/jest.config.ts" \
+    "$PROJECT_ROOT/jest.config.js" \
+    "$PROJECT_ROOT/jest.config.cjs" || true)
 
   if [ ! -f "$PROJECT_ROOT/package.json" ]; then
     blockers="${blockers}- 缺少 package.json，无法执行 npm 级本地测试"$'\n'
   fi
-  if [ -z "$feature_file" ]; then
-    blockers="${blockers}- tasks.md 未声明文件范围，无法建立 feature-scope 测试映射"$'\n'
+
+  rm -rf "$PROJECT_ROOT/coverage"
+
+  if has_package_script "typecheck"; then
+    typecheck_command="npm run typecheck"
+    set +e
+    typecheck_output=$(npm run typecheck 2>&1)
+    [ $? -eq 0 ] && typecheck_status="PASS" || typecheck_status="FAIL"
+    set -e
+  elif [ -f "$PROJECT_ROOT/tsconfig.json" ]; then
+    typecheck_command="npx tsc --noEmit"
+    set +e
+    typecheck_output=$(npx tsc --noEmit 2>&1)
+    [ $? -eq 0 ] && typecheck_status="PASS" || typecheck_status="FAIL"
+    set -e
   fi
-  if [ -z "$feature_tests" ]; then
-    blockers="${blockers}- 未根据文件范围匹配到相关测试文件"$'\n'
+
+  if has_package_script "lint"; then
+    # 优先只 lint 本次变更的文件，减少噪音；若无变更文件则全量 lint
+    local lint_files=""
+    lint_files=$(git -C "$PROJECT_ROOT" diff --name-only HEAD 2>/dev/null \
+      | grep -E '\.(ts|tsx|js|jsx)$' | xargs 2>/dev/null || true)
+    if [ -n "$lint_files" ]; then
+      lint_command="npm run lint -- $lint_files"
+      set +e
+      # shellcheck disable=SC2086
+      lint_output=$(npm run lint -- $lint_files 2>&1)
+      [ $? -eq 0 ] && lint_status="PASS" || lint_status="FAIL"
+      set -e
+    else
+      lint_command="npm run lint"
+      set +e
+      lint_output=$(npm run lint 2>&1)
+      [ $? -eq 0 ] && lint_status="PASS" || lint_status="FAIL"
+      set -e
+    fi
   fi
-  if [ -z "$vitest_config" ]; then
-    blockers="${blockers}- 未找到 vitest 配置文件，无法执行 feature-scope 覆盖率测试"$'\n'
+
+  if has_package_script "build"; then
+    build_command="npm run build"
+    set +e
+    build_output=$(npm run build 2>&1)
+    [ $? -eq 0 ] && build_status="PASS" || build_status="FAIL"
+    set -e
+  fi
+
+  if has_package_script "test:e2e" && [ -n "$(first_existing_file "$PROJECT_ROOT/playwright.config.ts" "$PROJECT_ROOT/playwright.config.js" || true)" ]; then
+    has_playwright_runner="true"
+    feature_command="npm run test:e2e"
+    e2e_command="$feature_command"
+    set +e
+    feature_output=$(npm run test:e2e 2>&1)
+    feature_exit=$?
+    e2e_output="$feature_output"
+    e2e_exit=$feature_exit
+    set -e
+    if [ "$e2e_exit" -eq 0 ]; then
+      e2e_status="PASS"
+    elif printf '%s' "$e2e_output" | grep -q "operation not permitted\|Executable doesn't exist\|browserType.launch"; then
+      e2e_status="NOT_RUN"
+    else
+      e2e_status="FAIL"
+    fi
+
+    if [ "$e2e_status" = "PASS" ] \
+      && [ "$lint_status" != "FAIL" ] \
+      && [ "$build_status" != "FAIL" ]; then
+      feature_status="PASS"
+    fi
+  elif [ -n "$feature_file" ] && [ -n "$feature_tests" ] && [ -n "$vitest_config" ]; then
+    has_feature_scope_runner="true"
+    feature_command="FEATURE_COVERAGE_INCLUDE=$feature_file npx vitest run --config $vitest_config_rel $(printf '%s ' $feature_tests)--coverage"
+    set +e
+    feature_output=$(FEATURE_COVERAGE_INCLUDE="$feature_file" npx vitest run --config "$vitest_config_rel" $feature_tests --coverage 2>&1)
+    feature_exit=$?
+    set -e
+
+    if [ -f "$coverage_file" ]; then
+      coverage_statements=$(node -e "const f=require('$coverage_file'); const v=f['$feature_file']||f.total||{}; console.log((v.statements&&v.statements.pct)!=null?v.statements.pct:'N/A')")
+      coverage_branches=$(node -e "const f=require('$coverage_file'); const v=f['$feature_file']||f.total||{}; console.log((v.branches&&v.branches.pct)!=null?v.branches.pct:'N/A')")
+      coverage_functions=$(node -e "const f=require('$coverage_file'); const v=f['$feature_file']||f.total||{}; console.log((v.functions&&v.functions.pct)!=null?v.functions.pct:'N/A')")
+      coverage_lines=$(node -e "const f=require('$coverage_file'); const v=f['$feature_file']||f.total||{}; console.log((v.lines&&v.lines.pct)!=null?v.lines.pct:'N/A')")
+    fi
+
+    if [ "$feature_exit" -eq 0 ] \
+      && [ "$typecheck_status" != "FAIL" ] \
+      && is_numeric "$coverage_statements" \
+      && is_numeric "$coverage_branches" \
+      && is_numeric "$coverage_functions" \
+      && is_numeric "$coverage_lines" \
+      && awk "BEGIN {exit !($coverage_statements >= 80 && $coverage_branches >= 75 && $coverage_functions >= 80 && $coverage_lines >= 80)}"; then
+      feature_status="PASS"
+    fi
+  elif has_package_script "test"; then
+    has_feature_scope_runner="false"
+    feature_command="npm test -- --runInBand"
+    set +e
+    feature_output=$(npm test -- --runInBand 2>&1)
+    feature_exit=$?
+    set -e
+    if [ "$feature_exit" -eq 0 ] \
+      && [ "$lint_status" != "FAIL" ] \
+      && [ "$build_status" != "FAIL" ]; then
+      feature_status="PASS"
+    fi
+  else
+    blockers="${blockers}- 未找到可执行的测试入口（既没有 Playwright，也没有 vitest feature-scope 运行条件，也没有 package.json 的 test script）"$'\n'
   fi
 
   if [ -n "$blockers" ]; then
@@ -446,46 +629,17 @@ EOF
     return 1
   fi
 
-  rm -rf "$PROJECT_ROOT/coverage"
-
-  if has_package_script "typecheck"; then
-    typecheck_command="npm run typecheck"
-    if npm run typecheck > /tmp/"$feature_name"-typecheck.log 2>&1; then
-      typecheck_status="PASS"
-    else
-      typecheck_status="FAIL"
-    fi
-  fi
-
-  feature_command="FEATURE_COVERAGE_INCLUDE=$feature_file npx vitest run --config $vitest_config_rel $(printf '%s ' $feature_tests)--coverage"
-  set +e
-  feature_output=$(FEATURE_COVERAGE_INCLUDE="$feature_file" npx vitest run --config "$vitest_config_rel" $feature_tests --coverage 2>&1)
-  feature_exit=$?
-  set -e
-
-  if [ -f "$coverage_file" ]; then
-    coverage_statements=$(node -e "const f=require('$coverage_file'); const v=f['$feature_file']||f.total||{}; console.log((v.statements&&v.statements.pct)!=null?v.statements.pct:'N/A')")
-    coverage_branches=$(node -e "const f=require('$coverage_file'); const v=f['$feature_file']||f.total||{}; console.log((v.branches&&v.branches.pct)!=null?v.branches.pct:'N/A')")
-    coverage_functions=$(node -e "const f=require('$coverage_file'); const v=f['$feature_file']||f.total||{}; console.log((v.functions&&v.functions.pct)!=null?v.functions.pct:'N/A')")
-    coverage_lines=$(node -e "const f=require('$coverage_file'); const v=f['$feature_file']||f.total||{}; console.log((v.lines&&v.lines.pct)!=null?v.lines.pct:'N/A')")
-  fi
-
-  if [ "$feature_exit" -eq 0 ] \
-    && [ "$typecheck_status" != "FAIL" ] \
-    && is_numeric "$coverage_statements" \
-    && is_numeric "$coverage_branches" \
-    && is_numeric "$coverage_functions" \
-    && is_numeric "$coverage_lines" \
-    && awk "BEGIN {exit !($coverage_statements >= 80 && $coverage_branches >= 75 && $coverage_functions >= 80 && $coverage_lines >= 80)}"; then
-    feature_status="PASS"
-  fi
-
   if has_package_script "test"; then
     repo_command="npm test"
-    set +e
-    repo_output=$(npm test 2>&1)
-    repo_exit=$?
-    set -e
+    if [ "$feature_command" = "npm test -- --runInBand" ]; then
+      repo_output="$feature_output"
+      repo_exit=$feature_exit
+    else
+      set +e
+      repo_output=$(npm test 2>&1)
+      repo_exit=$?
+      set -e
+    fi
     if [ "$repo_exit" -eq 0 ]; then
       full_repo_status="PASS"
       repo_debt_status="PASS"
@@ -495,22 +649,6 @@ EOF
     fi
   fi
 
-  if has_package_script "test:e2e" && [ -n "$(first_existing_file "$PROJECT_ROOT/playwright.config.ts" "$PROJECT_ROOT/playwright.config.js" || true)" ]; then
-    e2e_command="npm run test:e2e"
-    set +e
-    e2e_output=$(npm run test:e2e 2>&1)
-    e2e_exit=$?
-    set -e
-    if [ "$e2e_exit" -eq 0 ]; then
-      e2e_status="PASS"
-    elif printf '%s' "$e2e_output" | grep -q "operation not permitted"; then
-      e2e_status="NOT_RUN"
-    else
-      e2e_status="FAIL"
-    fi
-  fi
-
-  # WORKFLOW_VERDICT：feature-scope 通过即 PASS（规范：旧债单独记录，不阻断新功能）
   if [ "$feature_status" = "PASS" ] && [ "$e2e_status" != "FAIL" ]; then
     workflow_verdict="PASS"
   fi
@@ -527,6 +665,9 @@ EOF
 | Feature 单元 | $feature_status |
 | Feature E2E | $e2e_status |
 | 全仓回归 | $full_repo_status |
+| 类型检查 | $typecheck_status |
+| Lint | $lint_status |
+| Build | $build_status |
 
 ## 覆盖率
 | 范围 | 指标 | 当前 | 阈值 | 状态 |
@@ -537,16 +678,19 @@ EOF
 | Feature | Lines | ${coverage_lines}% | 80% | $( [ "$coverage_lines" != "N/A" ] && awk "BEGIN {print ($coverage_lines >= 80 ? \"PASS\" : \"FAIL\")}" || echo "N/A" ) |
 
 ## Feature-scope 结论
-- 变更文件：$feature_file
+- 变更文件：${feature_file:-N/A}
 - 直接相关测试文件：$(printf '%s\n' "$feature_tests" | sed 's#^'"$PROJECT_ROOT"'/##' | paste -sd ', ' -)
 - 直接相关测试命令：\`$feature_command\`
+- Feature runner 模式：$( [ "$has_playwright_runner" = "true" ] && echo "playwright e2e" || ([ "$has_feature_scope_runner" = "true" ] && echo "vitest feature-scope" || echo "repo test fallback") )
 - 类型检查：\`$typecheck_command\` → $typecheck_status
+- Lint：\`$lint_command\` → $lint_status
+- Build：\`$build_command\` → $build_status
 - 结果：$feature_status
 
 ## 全仓回归观察
 - 更广范围命令：\`$repo_command\`
 - 结果：$full_repo_status
-- 归因：$( [ "$full_repo_status" = "FAIL" ] && echo "本地 fallback 无法自动区分历史债与新回归，需人工复核" || echo "未发现额外阻断信号" )
+- 归因：$( [ "$full_repo_status" = "FAIL" ] && echo "项目当前 test script 未通过，需人工判断是新回归还是历史债" || echo "未发现额外阻断信号" )
 
 ## E2E 观察
 - 命令：\`$e2e_command\`
@@ -555,14 +699,32 @@ EOF
 
 ## 关键命令输出
 
+### Feature / Test
 \`\`\`
 $(printf '%s\n' "$feature_output" | sed -n '1,120p')
 \`\`\`
 
+### Typecheck
+\`\`\`
+$(printf '%s\n' "$typecheck_output" | sed -n '1,80p')
+\`\`\`
+
+### Lint
+\`\`\`
+$(printf '%s\n' "$lint_output" | sed -n '1,80p')
+\`\`\`
+
+### Build
+\`\`\`
+$(printf '%s\n' "$build_output" | sed -n '1,80p')
+\`\`\`
+
+### Repo Test
 \`\`\`
 $(printf '%s\n' "$repo_output" | sed -n '1,80p')
 \`\`\`
 
+### E2E
 \`\`\`
 $(printf '%s\n' "$e2e_output" | sed -n '1,80p')
 \`\`\`
@@ -700,18 +862,25 @@ human_gate_deploy() {
 }
 
 # 检测活跃的 feature 名称
+# 规则：不要只看 tasks.md（旧 feature 容易误判），而是综合当前 specs 子目录中最近变更的
+# requirements/design/tasks/awaiting-clarification 文件来判断当前活跃 feature。
 detect_feature_name() {
-  # 优先找 tasks.md（Stage 1b 完成后），fallback 到 requirements.md（Stage 1a 完成后）
-  local by_tasks by_reqs
-  by_tasks=$(ls -t "$PROJECT_ROOT"/specs/*/tasks.md 2>/dev/null \
-    | head -1 | sed "s|$PROJECT_ROOT/specs/||;s|/tasks.md||" || echo "")
-  if [ -n "$by_tasks" ]; then
-    echo "$by_tasks"
+  local latest_file latest_feature
+  latest_file=$(find "$PROJECT_ROOT/specs" -mindepth 2 -maxdepth 2 -type f \
+    \( -name 'requirements.md' -o -name 'design.md' -o -name 'tasks.md' -o -name 'awaiting-clarification.json' \) \
+    ! -path '*/archive/*' \
+    -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -1)
+
+  if [ -n "$latest_file" ]; then
+    latest_feature=$(echo "$latest_file" | sed "s|$PROJECT_ROOT/specs/||" | cut -d/ -f1)
+    echo "$latest_feature"
     return
   fi
-  by_reqs=$(ls -t "$PROJECT_ROOT"/specs/*/requirements.md 2>/dev/null \
-    | head -1 | sed "s|$PROJECT_ROOT/specs/||;s|/requirements.md||" || echo "")
-  echo "$by_reqs"
+
+  # fallback：如果还没有任何 spec 文件，再退回到最近的目录名
+  find "$PROJECT_ROOT/specs" -mindepth 1 -maxdepth 1 -type d \
+    ! -name 'archive' -print0 2>/dev/null | xargs -0 ls -td 2>/dev/null \
+    | head -1 | xargs basename 2>/dev/null || true
 }
 
 # ============================================================
@@ -926,6 +1095,8 @@ step2_develop() {
   complexity=$(get_complexity "$feature_name")
   local tasks_file="$PROJECT_ROOT/specs/$feature_name/tasks.md"
 
+  ensure_not_paused "$feature_name" "step2_develop" || return 0
+
   echo "=== Step 2: 开发执行 ==="
   notify "💻 Step 2: 开始开发 $feature_name (complexity: $complexity)"
 
@@ -1066,6 +1237,8 @@ extract_task_field() {
 }
 
 # Antigravity CLI 兼容层（适配 opencli 1.3.x）
+ANTIGRAVITY_BIN="${ANTIGRAVITY_BIN:-/Applications/Antigravity.app/Contents/Resources/app/bin/antigravity}"
+
 # 说明：当前 opencli antigravity send 不支持 --model/--variant，且 send 只保证发出消息，
 # AI 回复需再通过 read 读取。因此这里统一做状态检查 + send + best-effort read。
 antigravity_is_page_scriptable() {
@@ -1387,6 +1560,21 @@ step2_sequential() {
   local has_antigravity
   has_antigravity=$(count_pattern_in_file "agent: antigravity" "$tasks_file")
 
+  # 收尾格式化：尽量贴近本地 VS Code command+s（Prettier on save）
+  local format_changed_files_after_dev
+  format_changed_files_after_dev() {
+    local changed_files=""
+    changed_files=$(git -C "$PROJECT_ROOT" diff --name-only -- '*.js' '*.jsx' '*.ts' '*.tsx' '*.json' '*.md' '*.css' '*.scss' 2>/dev/null || true)
+    [ -z "$changed_files" ] && return 0
+
+    echo "  [format-on-save] 使用 Prettier 格式化变更文件（贴近 command+s）..." >&2
+    printf '%s\n' "$changed_files" | while IFS= read -r rel; do
+      [ -z "$rel" ] && continue
+      [ -f "$PROJECT_ROOT/$rel" ] || continue
+      npx prettier --write "$PROJECT_ROOT/$rel" >/dev/null 2>&1 || true
+    done
+  }
+
   # ── Step 2a: Antigravity UI 还原（显式优先执行）──
   if [ "$has_antigravity" -gt 0 ] && [ "${ENABLE_UI_RESTORER:-false}" = "true" ]; then
     echo "  [Step 2a] 检测到 $has_antigravity 个 antigravity 任务，开始 UI 还原" >&2
@@ -1492,6 +1680,8 @@ $error_issues
     Skip tasks marked 'agent: antigravity' (already completed in Step 2a).
     Follow task dependencies. Mark each task as done after completion.
   " >&2
+
+  format_changed_files_after_dev
 }
 
 # ============================================================
@@ -1500,6 +1690,8 @@ $error_issues
 step3_review() {
   local feature_name="$1"
   local review_report="$PROJECT_ROOT/specs/$feature_name/review-report.md"
+
+  ensure_not_paused "$feature_name" "step3_review" || return 0
 
   echo "=== Step 3: code-reviewer ==="
   notify "🔍 开始代码审查: $feature_name"
@@ -1536,6 +1728,8 @@ step4_test() {
   local feature_status
   local repo_debt_status
   local workflow_verdict
+
+  ensure_not_paused "$feature_name" "step4_test" || return 0
 
   echo "=== Step 4: test-runner ==="
   notify "🧪 Step 4: 开始测试 $feature_name"
@@ -1632,6 +1826,8 @@ step4_fix_and_retry() {
 step5_doc_sync() {
   local feature_name="$1"
 
+  ensure_not_paused "$feature_name" "step5_doc_sync" || return 0
+
   echo "=== Step 5: doc-syncer ==="
   notify "📚 Step 5: 开始同步文档 $feature_name"
   run_local_doc_sync "$feature_name"
@@ -1643,6 +1839,8 @@ step5_doc_sync() {
 # ============================================================
 step6_deploy() {
   local feature_name="$1"
+
+  ensure_not_paused "$feature_name" "step6_deploy" || return 0
 
   echo "=== Step 6: 部署 ==="
 
@@ -1682,6 +1880,8 @@ step6_deploy() {
 # ============================================================
 step7_notify() {
   local feature_name="$1"
+
+  ensure_not_paused "$feature_name" "step7_notify" || return 0
 
   echo "=== Step 7: 完成通知 ==="
 
@@ -1735,6 +1935,9 @@ run_pipeline_steps_2_to_7() {
   local pipeline_log="$PROJECT_ROOT/specs/.workflow-log"
   local step_start
   local complexity
+
+  ensure_not_paused "$feature_name" "before step2-to-step7" || return 0
+
   complexity=$(get_complexity "$feature_name")
   echo "  复杂度: $complexity"
 
@@ -1944,6 +2147,8 @@ cmd_pause() {
     '{feature:$feature,status:"paused",paused_at:$ts,paused_step:$ps,last_done_step:$ls,requirements_snapshot:"requirements.md.snapshot"}' \
     > "$spec_dir/paused.json"
 
+  terminate_feature_pipeline_processes "$feature_name"
+
   log "PIPELINE_PAUSED_BY_USER: $feature_name at step $paused_step" "$pipeline_log"
   notify "⏸️ 工作流已手动暂停 (断点 Step $paused_step): $feature_name"
   echo "⏸️ 已暂停 '$feature_name'（断点 Step $paused_step）"
@@ -1965,13 +2170,24 @@ step1_restart_with_diff() {
   local model
   model=$(select_model "low")
 
-  # 计算 diff
-  local diff_output
-  diff_output=$(diff "$snapshot_file" "$req_file" 2>/dev/null || true)
+  # 计算 diff（先拿完整 diff，再过滤掉元信息噪音）
+  local raw_diff_output diff_output
+  raw_diff_output=$(diff "$snapshot_file" "$req_file" 2>/dev/null || true)
+  diff_output=$(printf '%s\n' "$raw_diff_output" | awk '
+    /^--- / || /^\+\+\+ / || /^@@ / { print; next }
+    /^[+-]> 状态：/ { next }
+    /^[+-]> 更新时间：/ { next }
+    /^[+-]> 审查状态：/ { next }
+    /^[+-]> 审查模型：/ { next }
+    /^[+-]> 审查轮次：/ { next }
+    /^[+-]> 审查结论：/ { next }
+    /^[+-]> 修改项：/ { next }
+    { print }
+  ' | sed '/^$/d')
 
-  if [ -z "$diff_output" ]; then
-    echo "  [restart] requirements.md 无变更，直接从 Step $paused_step 继续" >&2
-    notify "▶️ 需求无变更，从 Step $paused_step 继续: $feature_name"
+  if [ -z "$diff_output" ] || [ "$diff_output" = "--- $snapshot_file" ] || [ "$diff_output" = "+++ $req_file" ]; then
+    echo "  [restart] requirements.md 无实质需求变更，直接从 Step $paused_step 继续" >&2
+    notify "▶️ 需求无实质变更，从 Step $paused_step 继续: $feature_name"
     log "PIPELINE_RESTART_NO_CHANGE: $feature_name from Step $paused_step" "$pipeline_log"
     return 0
   fi
@@ -2091,6 +2307,25 @@ cmd_restart() {
   echo "  [restart] '$feature_name' 暂停于 $paused_at，断点 Step $paused_step" >&2
   notify "🔄 开始重启工作流: $feature_name (断点 Step $paused_step)"
   log "PIPELINE_RESTART_START: $feature_name from Step $paused_step" "$pipeline_log"
+
+  # 当断点已经在 Step 3 及之后，默认视为执行态恢复，不再回到 spec diff/update
+  if is_numeric "$paused_step" && [ "$paused_step" -ge 3 ]; then
+    echo "  [restart] 断点 >= Step 3，跳过 requirements diff，直接从断点继续" >&2
+    rm -f "$PROJECT_ROOT/specs/$feature_name/paused.json"
+    log "PIPELINE_PAUSED_STATE_CLEARED: $feature_name" "$pipeline_log"
+    notify "▶️ 从 Step $paused_step 继续工作流: $feature_name"
+    log "PIPELINE_RESTART_RESUME: $feature_name from Step $paused_step" "$pipeline_log"
+
+    case "$paused_step" in
+      3) step3_review "$feature_name" && step4_test "$feature_name" && step5_doc_sync "$feature_name" && step6_deploy "$feature_name" && step7_notify "$feature_name" ;;
+      4) step4_test "$feature_name" && step5_doc_sync "$feature_name" && step6_deploy "$feature_name" && step7_notify "$feature_name" ;;
+      5) step5_doc_sync "$feature_name" && step6_deploy "$feature_name" && step7_notify "$feature_name" ;;
+      6) step6_deploy "$feature_name" && step7_notify "$feature_name" ;;
+      7) step7_notify "$feature_name" ;;
+      *) echo "✅ '$feature_name' 所有 Step 均已完成，无需继续" ;;
+    esac
+    return 0
+  fi
 
   # 检查快照是否存在
   local spec_dir="$PROJECT_ROOT/specs/$feature_name"
