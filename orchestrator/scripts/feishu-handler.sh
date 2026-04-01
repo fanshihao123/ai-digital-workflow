@@ -192,6 +192,34 @@ mark_clarification_answered() {
   fi
 }
 
+# ── Spec 审查阻断状态管理 ──
+
+# 保存 spec 审查阻断状态（CRITICAL >= 3 时调用）
+save_spec_review_state() {
+  local feature_name="$1"
+  local critical_count="$2"
+  local state_file="$PROJECT_ROOT/specs/$feature_name/awaiting-spec-review.json"
+  jq -n \
+    --arg feature "$feature_name" \
+    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson cc "$critical_count" \
+    '{feature:$feature,status:"awaiting",timestamp:$ts,critical_count:$cc}' \
+    > "$state_file"
+}
+
+# 检查是否有待处理的 spec 审查阻断
+has_pending_spec_review() {
+  local feature_name="$1"
+  local state_file="$PROJECT_ROOT/specs/$feature_name/awaiting-spec-review.json"
+  [ -f "$state_file" ] && jq -e '.status == "awaiting"' "$state_file" >/dev/null 2>&1
+}
+
+# 清理 spec 审查阻断状态
+clear_spec_review_state() {
+  local feature_name="$1"
+  rm -f "$PROJECT_ROOT/specs/$feature_name/awaiting-spec-review.json"
+}
+
 # 检查是否处于 /pause 手动暂停状态
 has_paused_state() {
   local feature_name="$1"
@@ -867,7 +895,7 @@ human_gate_deploy() {
 detect_feature_name() {
   local latest_file latest_feature
   latest_file=$(find "$PROJECT_ROOT/specs" -mindepth 2 -maxdepth 2 -type f \
-    \( -name 'requirements.md' -o -name 'design.md' -o -name 'tasks.md' -o -name 'awaiting-clarification.json' \) \
+    \( -name 'requirements.md' -o -name 'design.md' -o -name 'tasks.md' -o -name 'awaiting-clarification.json' -o -name 'awaiting-spec-review.json' \) \
     ! -path '*/archive/*' \
     -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -1)
 
@@ -1062,12 +1090,30 @@ step1_spec_writer() {
       "$PROJECT_ROOT/specs/$feature_name/spec-review.md" 2>/dev/null | tail -1)
     critical_count="${critical_count:-0}"
     if is_numeric "$critical_count" && [ "$critical_count" -ge 3 ]; then
+      # 自动保存阻断状态（paused.json + awaiting-spec-review.json）
+      save_spec_review_state "$feature_name" "$critical_count"
+      local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+      jq -n \
+        --arg feature "$feature_name" \
+        --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --argjson ps 1 \
+        --argjson ls 0 \
+        '{feature:$feature,status:"paused",paused_at:$ts,paused_step:$ps,last_done_step:$ls,reason:"spec-review-critical",requirements_snapshot:"requirements.md.snapshot"}' \
+        > "$spec_dir/paused.json"
+      # 保存 requirements.md 快照（供 /restart 做 diff 用）
+      [ -f "$spec_dir/requirements.md" ] && cp "$spec_dir/requirements.md" "$spec_dir/requirements.md.snapshot"
+      log "PIPELINE_PAUSED_BY_SPEC_REVIEW: $feature_name ($critical_count CRITICAL_ISSUES)" "$PROJECT_ROOT/specs/.workflow-log"
+
+      # 提取 CRITICAL 问题摘要发送给用户
+      local critical_summary
+      critical_summary=$(grep -i "CRITICAL\|ISSUE" "$spec_dir/spec-review.md" 2>/dev/null | head -20)
       agent_notify \
-        "需求 '$feature_name' 的 Spec 审查发现 $critical_count 个严重问题，流水线已阻断。详见 specs/$feature_name/spec-review.md。" \
-        "是否需要我根据审查意见重新修改 spec 后继续？还是由你人工处理后再 /restart $feature_name？" \
+        "需求 '$feature_name' 的 Spec 审查发现 $critical_count 个严重问题，流水线已自动暂停。\n\n问题摘要：\n${critical_summary}\n\n详见 specs/$feature_name/spec-review.md" \
+        "请向用户展示以上问题，询问修改方向。用户回复后执行：/fix-spec $feature_name {用户的修改指导}" \
         "$feature_name"
-      echo "  ❌ $critical_count 个 CRITICAL_ISSUES，阻断流水线" >&2
-      return 1
+      echo "  ❌ $critical_count 个 CRITICAL_ISSUES，已自动暂停（/fix-spec 恢复）" >&2
+      echo "__PAUSED__"
+      return 0
     fi
 
     # 验证三个文件是否已标记为 reviewed
@@ -2113,7 +2159,11 @@ cmd_pause() {
     local already_at
     already_at=$(get_paused_field "$feature_name" "paused_at")
     echo "⚠️ '$feature_name' 已处于暂停状态（暂停于 $already_at）"
-    echo "   修改需求后执行: /restart $feature_name"
+    if has_pending_spec_review "$feature_name"; then
+      echo "   当前因 Spec 审查严重问题阻断，请用: /fix-spec $feature_name {修改指导}"
+    else
+      echo "   修改需求后执行: /restart $feature_name"
+    fi
     return 0
   fi
 
@@ -2293,6 +2343,13 @@ cmd_restart() {
     return 1
   fi
 
+  # 检查是否处于 spec 审查阻断状态（必须用 /fix-spec 恢复）
+  if has_pending_spec_review "$feature_name"; then
+    echo "⚠️ '$feature_name' 处于 Spec 审查阻断状态（CRITICAL 问题未解决）"
+    echo "   请用 /fix-spec $feature_name {修改指导} 告诉 AI 如何修改"
+    return 1
+  fi
+
   if ! has_paused_state "$feature_name"; then
     echo "❌ '$feature_name' 不处于 paused 状态"
     echo "   提示: 先用 /pause $feature_name 暂停工作流"
@@ -2395,6 +2452,14 @@ cmd_resume() {
     return 0
   fi
 
+  # 若处于 spec 审查阻断状态，提示用 /fix-spec
+  if has_pending_spec_review "$feature_name"; then
+    echo "⏸️ '$feature_name' 处于 Spec 审查阻断状态（CRITICAL 问题未解决）"
+    echo "   请用 /fix-spec $feature_name {修改指导} 告诉 AI 如何修改"
+    echo "   示例: /fix-spec $feature_name 去掉短信验证，用JWT替换session"
+    return 0
+  fi
+
   # 从 workflow-log 判断断点
   local last_done_step=1
   if [ -f "$pipeline_log" ]; then
@@ -2420,6 +2485,173 @@ cmd_resume() {
     7) step7_notify "$feature_name" ;;
     *) echo "✅ '$feature_name' 流水线已全部完成，无需恢复" ;;
   esac
+}
+
+# ============================================================
+# /fix-spec 命令：用户提供修改指导，Claude 自动修复 spec 并重新审查
+# ============================================================
+cmd_fix_spec() {
+  local args="$1"
+  local feature_name
+  feature_name=$(echo "$args" | awk '{print $1}')
+  local guidance
+  guidance=$(echo "$args" | cut -d' ' -f2-)
+  [ "$guidance" = "$feature_name" ] && guidance=""
+
+  if [ -z "$feature_name" ]; then
+    feature_name=$(detect_feature_name)
+  fi
+  if [ -z "$feature_name" ]; then
+    echo "❌ 未找到活跃的需求。用法: /fix-spec {需求名称} {修改指导}"
+    echo "   示例: /fix-spec user-login 1.去掉短信验证 2.用JWT替换session"
+    return 1
+  fi
+  if ! has_pending_spec_review "$feature_name"; then
+    echo "❌ '$feature_name' 没有待处理的 spec 审查问题"
+    echo "   提示: 该命令仅在 Codex 审查发现严重问题并自动暂停后可用"
+    return 1
+  fi
+  if [ -z "$guidance" ]; then
+    echo "❌ 请提供修改指导"
+    echo "   示例: /fix-spec $feature_name 1.去掉短信验证 2.用JWT替换session"
+    return 1
+  fi
+
+  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  local pipeline_log="$PROJECT_ROOT/specs/.workflow-log"
+
+  # 立即标记为处理中，防止并发 /fix-spec 重入
+  local state_file="$spec_dir/awaiting-spec-review.json"
+  if [ -f "$state_file" ]; then
+    local tmp; tmp=$(mktemp)
+    jq '.status="fixing"' "$state_file" > "$tmp" && mv "$tmp" "$state_file"
+  fi
+
+  notify "🔧 开始根据用户指导修复 spec: $feature_name"
+  log "FIX_SPEC_START: $feature_name" "$pipeline_log"
+
+  # Claude 根据 spec-review.md + 用户指导，自动修改三文档
+  local model
+  local complexity
+  complexity=$(get_complexity "$feature_name")
+  model=$(select_model "$complexity")
+
+  echo "  [fix-spec] Claude 根据审查意见 + 用户指导修改 spec..." >&2
+  opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
+    Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
+    Read $PROJECT_ROOT/.claude/CLAUDE.md
+    Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
+    Read $PROJECT_ROOT/.claude/SECURITY.md
+    Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
+    $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
+    Read $spec_dir/spec-review.md
+    Read $spec_dir/requirements.md
+    Read $spec_dir/design.md
+    Read $spec_dir/tasks.md
+
+    Codex spec 审查报告中有严重问题（CRITICAL_ISSUES >= 3），用户提供了以下修改指导：
+    $guidance
+
+    请执行以下操作：
+    1. 逐条对照 spec-review.md 中的 CRITICAL/ISSUE 项
+    2. 结合用户指导，修改 requirements.md、design.md、tasks.md
+    3. 用户指导优先于 Codex 建议（当两者冲突时以用户为准）
+    4. 更新三个文件头部状态为 revised
+    5. 保持文件格式和结构不变，只修改需要改的部分
+  " >&2
+
+  # 重新走 Codex 审查
+  echo "  [fix-spec] 重新执行 Codex 审查..." >&2
+  notify "🟣 fix-spec: 重新执行 Codex spec 审查 ($feature_name)"
+
+  if command -v codex &> /dev/null; then
+    codex exec --full-auto "
+      你是一个资深技术架构师，负责审查以下 spec 文档的质量。
+
+      requirements.md:
+      $(cat "$spec_dir/requirements.md")
+
+      design.md:
+      $(cat "$spec_dir/design.md")
+
+      tasks.md:
+      $(cat "$spec_dir/tasks.md")
+
+      项目架构参考:
+      $(cat "$PROJECT_ROOT/.claude/ARCHITECTURE.md" 2>/dev/null || echo '(无)')
+
+      请从 13 维度审查（R1-R4, D1-D4, T1-T5），对每项给出 PASS / ISSUE 判定。
+      输出格式: DIMENSION: Rx  VERDICT: PASS|ISSUE  DETAIL: ...  SUGGESTION: ...
+      最后输出: OVERALL: PASS|NEEDS_REVISION  CRITICAL_ISSUES: {数量}
+    " > "$spec_dir/spec-review.md" 2>/dev/null || {
+      echo "  ⚠️ Codex 重新审查失败" >&2
+    }
+  else
+    # codex 不可用时，由 Claude 执行审查替代，避免读取旧 spec-review.md 陷入死循环
+    echo "  ⚠️ codex 未安装，改用 Claude 执行审查" >&2
+    opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
+      Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
+      Read $spec_dir/requirements.md
+      Read $spec_dir/design.md
+      Read $spec_dir/tasks.md
+      $([ -f "$PROJECT_ROOT/.claude/ARCHITECTURE.md" ] && echo "Read $PROJECT_ROOT/.claude/ARCHITECTURE.md")
+
+      你是一个资深技术架构师，请从 13 维度审查（R1-R4, D1-D4, T1-T5）。
+      对每项给出 PASS / ISSUE 判定。
+      输出格式: DIMENSION: Rx  VERDICT: PASS|ISSUE  DETAIL: ...  SUGGESTION: ...
+      最后输出: OVERALL: PASS|NEEDS_REVISION  CRITICAL_ISSUES: {数量}
+      将结果写入 $spec_dir/spec-review.md
+    " >&2
+  fi
+
+  # Claude 复审定稿
+  if [ -f "$spec_dir/spec-review.md" ]; then
+    echo "  [fix-spec] Claude 复审定稿..." >&2
+    opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
+      Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
+      Read $spec_dir/spec-review.md
+      Read $spec_dir/requirements.md
+      Read $spec_dir/design.md
+      Read $spec_dir/tasks.md
+
+      Execute spec-writer Stage 3: 根据 Codex 审查报告复审并定稿。
+      - PASS 的维度不做修改
+      - ISSUE 的维度按建议修改（如不同意则在 spec-review.md 中标注理由）
+      - 更新三个文件头部状态为 reviewed
+
+      如果 CRITICAL_ISSUES >= 3 且无法全部解决，输出 NEEDS_HUMAN_REVIEW。
+    " >&2
+  fi
+
+  # 再次检查 CRITICAL_ISSUES
+  local new_critical_count
+  new_critical_count=$(sed -n 's/.*CRITICAL_ISSUES:[[:space:]]*\([0-9]*\).*/\1/p' \
+    "$spec_dir/spec-review.md" 2>/dev/null | tail -1)
+  new_critical_count="${new_critical_count:-0}"
+
+  if is_numeric "$new_critical_count" && [ "$new_critical_count" -ge 3 ]; then
+    # 仍然不通过，更新状态，再次通知
+    save_spec_review_state "$feature_name" "$new_critical_count"
+    local critical_summary
+    critical_summary=$(grep -i "CRITICAL\|ISSUE" "$spec_dir/spec-review.md" 2>/dev/null | head -20)
+    agent_notify \
+      "需求 '$feature_name' 修改后重新审查仍有 $new_critical_count 个严重问题。\n\n问题摘要：\n${critical_summary}" \
+      "请告知用户仍有问题，询问进一步修改方向。用户回复后执行：/fix-spec $feature_name {修改指导}" \
+      "$feature_name"
+    echo "  ❌ 修改后仍有 $new_critical_count 个 CRITICAL_ISSUES，继续等待指导" >&2
+    log "FIX_SPEC_STILL_CRITICAL: $feature_name ($new_critical_count)" "$pipeline_log"
+    return 0
+  fi
+
+  # 审查通过，清理状态，继续流水线
+  clear_spec_review_state "$feature_name"
+  rm -f "$spec_dir/paused.json" "$spec_dir/requirements.md.snapshot"
+  log "FIX_SPEC_DONE: $feature_name (CRITICAL resolved)" "$pipeline_log"
+  log "STEP_1_DONE: $feature_name (fix-spec)" "$pipeline_log"
+  notify "✅ Spec 审查通过: $feature_name，继续流水线"
+  echo "  ✅ spec 审查通过，继续 Steps 2-7" >&2
+
+  run_pipeline_steps_2_to_7 "$feature_name"
 }
 
 # ============================================================
@@ -2541,6 +2773,32 @@ cmd_answer_clarification() {
         Read $PROJECT_ROOT/specs/$feature_name/tasks.md
         Execute spec-writer Stage 3: 复审定稿，PASS 项不改，ISSUE 项按建议修改，更新文件状态为 reviewed。
       " >&2
+
+      # CRITICAL >= 3 阻断检查（与主路径一致）
+      local critical_count
+      critical_count=$(sed -n 's/.*CRITICAL_ISSUES:[[:space:]]*\([0-9]*\).*/\1/p' \
+        "$PROJECT_ROOT/specs/$feature_name/spec-review.md" 2>/dev/null | tail -1)
+      critical_count="${critical_count:-0}"
+      if is_numeric "$critical_count" && [ "$critical_count" -ge 3 ]; then
+        local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+        save_spec_review_state "$feature_name" "$critical_count"
+        jq -n \
+          --arg feature "$feature_name" \
+          --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          --argjson ps 1 --argjson ls 0 \
+          '{feature:$feature,status:"paused",paused_at:$ts,paused_step:$ps,last_done_step:$ls,reason:"spec-review-critical",requirements_snapshot:"requirements.md.snapshot"}' \
+          > "$spec_dir/paused.json"
+        [ -f "$spec_dir/requirements.md" ] && cp "$spec_dir/requirements.md" "$spec_dir/requirements.md.snapshot"
+        log "PIPELINE_PAUSED_BY_SPEC_REVIEW: $feature_name ($critical_count CRITICAL_ISSUES, post-clarification)" "$PROJECT_ROOT/specs/.workflow-log"
+        local critical_summary
+        critical_summary=$(grep -i "CRITICAL\|ISSUE" "$spec_dir/spec-review.md" 2>/dev/null | head -20)
+        agent_notify \
+          "需求 '$feature_name' 澄清后审查仍有 $critical_count 个严重问题，流水线已自动暂停。\n\n问题摘要：\n${critical_summary}" \
+          "请向用户展示以上问题，询问修改方向。用户回复后执行：/fix-spec $feature_name {修改指导}" \
+          "$feature_name"
+        echo "  ❌ 澄清后仍有 $critical_count 个 CRITICAL_ISSUES，已自动暂停（/fix-spec 恢复）" >&2
+        return 0
+      fi
     fi
     notify "✅ Step 1 完成（澄清后）: $feature_name"
   else
@@ -2604,6 +2862,9 @@ if [[ "$MSG_TEXT" == /* ]]; then
     /answer)
       cmd_answer_clarification "$ARGS"
       ;;
+    /fix-spec)
+      cmd_fix_spec "$ARGS"
+      ;;
     /pause)
       cmd_pause "$ARGS"
       ;;
@@ -2629,7 +2890,7 @@ if [[ "$MSG_TEXT" == /* ]]; then
       ;;
     *)
       echo "Unknown command: $COMMAND"
-      echo "Available: /workflow /hotfix /review /test /answer /pause /restart /resume /deploy /rollback /status"
+      echo "Available: /workflow /hotfix /review /test /answer /fix-spec /pause /restart /resume /deploy /rollback /status"
       ;;
   esac
 else

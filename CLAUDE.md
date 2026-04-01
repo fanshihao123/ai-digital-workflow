@@ -64,7 +64,7 @@ Step 6: 部署(可选) + 飞书通知
 | 节点 | Agent 问什么 | 用户回复后执行 |
 |------|------------|-------------|
 | `[UNCERTAIN]` 开放问题 | 逐一列出问题 | `/answer` |
-| Spec 审查 CRITICAL | 自动修复还是人工处理？ | `/restart` 或等待 |
+| Spec 审查 CRITICAL >= 3 | 展示问题摘要，询问修改方向 | `/fix-spec`（Claude 自动修改 + 重新审查，支持多轮） |
 | 测试失败进修复回路 | 告知正在自动修复 | 无需操作 |
 | 自动修复也失败 | 帮你分析还是人工修？ | `/resume` |
 | 流水线异常崩溃 | 帮你排查还是直接继续？ | `/resume` |
@@ -116,6 +116,7 @@ openclaw agents bind ai-react --channel feishu --peer ou_xxxxxxxxxx
 | `/restart [feature] [变更描述]` | 从 `/pause` 恢复，自动 diff 需求，最小粒度更新 | 改完需求后继续；不改则直接从断点继续 |
 | `/resume [feature]` | 从崩溃/意外中断恢复，读日志找断点继续 | 网络抖动、进程被杀、手动 Ctrl+C |
 | `/answer {feature} {答复}` | 回复 `[UNCERTAIN]` 开放问题，恢复被暂停的流水线 | Step 1 检测到不确定项时自动触发暂停 |
+| `/fix-spec {feature} {修改指导}` | 回复 Spec 审查严重问题，Claude 自动修改三文档并重新审查 | Codex 审查 CRITICAL >= 3 自动暂停后 |
 | `/review [feature]` | 单独触发代码审查（Step 3） | 审查失败修完代码后重跑；或只想审查不跑完整流程 |
 | `/test [feature]` | 单独触发测试（Step 4） | 测试失败修完后重跑 |
 | `/status` | 查看 Git log、活跃 specs、扩展开关状态 | 不知道跑到哪了；确认扩展是否生效 |
@@ -137,6 +138,9 @@ openclaw agents bind ai-react --channel feishu --peer ou_xxxxxxxxxx
 
 收到开放问题询问，需要答复？
   └── /answer
+
+收到 Spec 审查严重问题通知？
+  └── /fix-spec（告诉 AI 修改方向，自动修复 + 重新审查）
 
 只想重跑审查或测试？
   └── /review 或 /test
@@ -252,6 +256,30 @@ SCORE < 8 → 人工确认节点（agent_notify 发飞书附截图）
 ### 测试标准
 
 覆盖率阈值：Statements 80%、Branches 75%、Functions 80%。**特性范围测试与全仓库历史债务分离**——新特性测试必须通过，历史债务不阻塞新功能。
+
+## Recent Improvements (2026-03-31 v2)
+
+### Spec 审查阻断自动化（`/fix-spec` 命令）
+- **自动保存阻断状态**: CRITICAL >= 3 时自动写入 `paused.json` + `awaiting-spec-review.json`，不再需要用户手动 `/pause`
+- **`/fix-spec` 命令**: 用户在飞书用自然语言描述修改方向，Claude 自动根据 `spec-review.md` + 用户指导修改三文档，然后重新走 Codex 审查
+- **支持多轮修复**: 若修改后仍不通过，再次通知用户，继续 `/fix-spec` 直到通过
+- **通过后自动继续**: 审查通过后自动清理状态、继续 Steps 2-7，无需手动操作
+- **统一阻断检查**: `/answer` 澄清后的 Codex 审查路径也加入了 CRITICAL >= 3 阻断 + `/fix-spec` 恢复机制
+- **飞书通知优化**: 阻断时发送 CRITICAL 问题摘要，Agent 引导用户回复修改方向
+
+### Spec 审查阻断安全性修复
+- **`/restart` 安全门**: 新增 `has_pending_spec_review()` 检查，阻止用户通过 `/restart` 绕过 CRITICAL 审查阻断，引导使用 `/fix-spec`
+- **`/resume` 安全门**: 同上，防止 `/resume` 跳过未解决的 CRITICAL 问题直接从 Step 2 继续
+- **Codex 不可用 fallback**: `/fix-spec` 无 codex 时改用 Claude 执行审查并覆写 `spec-review.md`，避免读取旧审查结果导致无限循环
+- **并发保护**: `/fix-spec` 入口立即将 `awaiting-spec-review.json` 状态标记为 `fixing`，第二个并发请求被拒绝
+- **`detect_feature_name` 增强**: 扫描文件列表新增 `awaiting-spec-review.json`，确保 spec 审查阻断的 feature 能被正确识别
+- **`/pause` 提示优化**: 对已处于 spec 审查阻断的 feature，提示使用 `/fix-spec` 而非 `/restart`
+
+**用户体验变化**：
+```
+旧流程: CRITICAL >= 3 → 飞书通知 → 用户手动改 specs 三文档 → /pause → /restart
+新流程: CRITICAL >= 3 → 飞书发问题摘要 → 用户回复修改方向 → /fix-spec 自动修复 + 重新审查
+```
 
 ## Recent Improvements (2026-03-31)
 
