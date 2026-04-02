@@ -20,6 +20,19 @@ step1_spec_writer() {
   # Stage 1a: Claude 仅生成 requirements.md（澄清前不生成 design/tasks，避免重复浪费）
   echo "  [Stage 1a] Claude 生成 requirements.md..." >&2
   model=$(select_model "low")
+
+  # ── Stage 1a Figma 预检：输入中已含 Figma URL 时，不要让 Claude 将其标为 [UNCERTAIN] ──
+  local stage1a_figma_hint=""
+  local input_figma_urls
+  input_figma_urls=$(echo "$input" | grep -oE 'https://[^ ]*figma\.com/[^ )]*' 2>/dev/null || true)
+  if [ -n "$input_figma_urls" ]; then
+    if [ "${ENABLE_UI_RESTORER:-false}" = "true" ]; then
+      stage1a_figma_hint="用户输入中已包含 Figma 设计稿链接且 UI 还原扩展已启用，请将 Figma URL 写入 requirements.md 的功能需求中，不要将'是否有 Figma 设计稿'标记为 [UNCERTAIN]。"
+    else
+      stage1a_figma_hint="用户输入中包含 Figma 链接但 UI 还原扩展未启用（ENABLE_UI_RESTORER=false），Figma URL 仅作参考记录，不要标记 agent: antigravity。"
+    fi
+  fi
+
   opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
     Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
     Read $PROJECT_ROOT/.claude/CLAUDE.md
@@ -27,6 +40,7 @@ step1_spec_writer() {
     Read $PROJECT_ROOT/.claude/SECURITY.md
     Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
     $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
+    ${stage1a_figma_hint:+$stage1a_figma_hint}
     Execute spec-writer Stage 1a: generate requirements.md ONLY (do NOT generate design.md or tasks.md yet) for: $input
     Mark all [UNCERTAIN] items as unchecked [ ] in the '开放问题' section of requirements.md.
     $([ "$is_hotfix" = "true" ] && echo "This is a /hotfix — generate minimal requirements.md only, no open questions needed")
@@ -78,6 +92,27 @@ step1_spec_writer() {
   # Stage 1b: requirements.md 无开放问题，继续生成 design.md + tasks.md
   feishu_notify "✅ **[Stage 1a]** requirements.md 生成完毕，无开放问题\n⏳ **[Stage 1b]** 开始生成 design.md + tasks.md..." "$feature_name"
   echo "  [Stage 1b] Claude 生成 design.md + tasks.md..." >&2
+
+  # ── Figma MCP 可用性实测（避免 Claude 把已可用的 Figma 错误升级为 [UNCERTAIN]）──
+  local figma_hint=""
+  local figma_urls
+  figma_urls=$(grep -oE 'https://[^ ]*figma\.com/[^ )]*' "$PROJECT_ROOT/specs/$feature_name/requirements.md" 2>/dev/null || true)
+
+  if [ -n "$figma_urls" ] && [ "${ENABLE_UI_RESTORER:-false}" = "true" ]; then
+    # 有 Figma URL + UI restorer 已启用 → 实测 Antigravity 连接
+    if antigravity_is_page_scriptable 2>/dev/null; then
+      figma_hint="【Figma MCP 状态：✅ 可用】requirements.md 中已包含 Figma URL，且 Antigravity 桥接正常。涉及 UI 还原的任务请直接标记 agent: antigravity 并填入 figma URL，不要将 Figma 可用性标为 [UNCERTAIN]。"
+      echo "  [Stage 1b] Figma MCP 可用，Figma URLs: $(echo "$figma_urls" | head -3 | tr '\n' ' ')" >&2
+    else
+      figma_hint="【Figma MCP 状态：⚠️ Antigravity 桥接未就绪】requirements.md 中有 Figma URL，但 Antigravity 当前未连接。UI 还原任务仍标记 agent: antigravity，设计规格字段留空（Step 2a 会重新连接提取）。不要将此标为 [UNCERTAIN]。"
+      echo "  [Stage 1b] Figma URL 存在但 Antigravity 桥接未就绪" >&2
+    fi
+  elif [ -n "$figma_urls" ]; then
+    figma_hint="【Figma MCP 状态：❌ UI restorer 未启用】requirements.md 中有 Figma URL，但 ENABLE_UI_RESTORER=false。所有任务使用 agent: claude-code，不标记 agent: antigravity。"
+    echo "  [Stage 1b] Figma URL 存在但 ENABLE_UI_RESTORER=false" >&2
+  fi
+  # 无 Figma URL 时不注入提示，由 Claude 按 SKILL.md 规则判断是否需要 [UNCERTAIN]
+
   opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
     Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
     Read $PROJECT_ROOT/.claude/CLAUDE.md
@@ -86,6 +121,7 @@ step1_spec_writer() {
     Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
     $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
     Read $PROJECT_ROOT/specs/$feature_name/requirements.md
+    ${figma_hint:+$figma_hint}
     Execute spec-writer Stage 1b: generate design.md + tasks.md based on the confirmed requirements.md above.
     $([ "$is_hotfix" = "true" ] && echo "This is a /hotfix — generate tasks.md directly with minimal design")
   " >&2

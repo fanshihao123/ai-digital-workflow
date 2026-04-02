@@ -29,24 +29,78 @@ ensure_not_paused() {
   return 0
 }
 
+# 递归收集指定 PID 的所有后代进程（子、孙...）
+_collect_descendants() {
+  local parent="$1"
+  local all_ps="$2"  # 预取的 "pid ppid" 列表
+  local children
+  children=$(echo "$all_ps" | awk -v p="$parent" '$2 == p { print $1 }')
+  for child in $children; do
+    echo "$child"
+    _collect_descendants "$child" "$all_ps"
+  done
+}
+
 # 终止指定 feature 的活跃 pipeline 进程（排除当前 /pause 自己）
+# /resume 拉起的执行链：feishu-handler.sh → opencli claude → claude CLI → 子进程
+# 需要匹配入口进程，再递归 kill 整个进程树（claude 子进程命令行不含 feature name）
 terminate_feature_pipeline_processes() {
   local feature_name="$1"
   local current_pid="$$"
-  local pids=""
+  local current_ppid
+  current_ppid=$(ps -o ppid= -p "$$" 2>/dev/null | tr -d ' ')
 
-  pids=$(ps -Ao pid=,command= | awk -v feature="$feature_name" -v self="$current_pid" '
-    /feishu-handler\.sh/ && $0 !~ /\/pause / && index($0, feature) > 0 {
-      pid=$1
-      if (pid != self) print pid
+  # 预取全部进程的 pid ppid（用于递归查子树）
+  local all_ps
+  all_ps=$(ps -Ao pid=,ppid= 2>/dev/null)
+
+  # 匹配入口进程：feishu-handler.sh / opencli.*claude / claude.*bypassPermissions
+  # 排除：当前 /pause 进程自身及其父进程
+  local root_pids
+  root_pids=$(ps -Ao pid=,ppid=,command= | awk -v feature="$feature_name" -v self="$current_pid" -v selfparent="$current_ppid" '
+    {
+      pid=$1; ppid=$2; $1=""; $2=""; cmd=$0
+    }
+    (pid == self || pid == selfparent) { next }
+    /\/pause / { next }
+    (
+      (cmd ~ /feishu-handler\.sh/ || cmd ~ /opencli.*claude/ || cmd ~ /claude.*bypassPermissions/)
+      && index(cmd, feature) > 0
+    ) {
+      print pid
     }
   ' 2>/dev/null || true)
 
-  [ -z "$pids" ] && return 0
+  [ -z "$root_pids" ] && return 0
 
-  echo "  [pause] 终止活跃 pipeline 进程: $(echo "$pids" | xargs)" >&2
+  # 从入口进程递归收集整个进程树（含 claude CLI、node 等子进程）
+  local all_pids="$root_pids"
+  while IFS= read -r rpid; do
+    [ -z "$rpid" ] && continue
+    local descendants
+    descendants=$(_collect_descendants "$rpid" "$all_ps")
+    [ -n "$descendants" ] && all_pids=$(printf '%s\n%s' "$all_pids" "$descendants")
+  done <<< "$root_pids"
+
+  # 去重 + 排除自身
+  all_pids=$(echo "$all_pids" | sort -un | grep -v "^${current_pid}$" | grep -v "^${current_ppid}$")
+  [ -z "$all_pids" ] && return 0
+
+  echo "  [pause] 终止活跃 pipeline 进程树: $(echo "$all_pids" | xargs)" >&2
+
+  # 先 SIGTERM
   while IFS= read -r pid; do
     [ -z "$pid" ] && continue
-    kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
-  done <<< "$pids"
+    kill -TERM "$pid" 2>/dev/null || true
+  done <<< "$all_pids"
+
+  # 等 2 秒，对仍存活的进程 SIGKILL
+  sleep 2
+  while IFS= read -r pid; do
+    [ -z "$pid" ] && continue
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "  [pause] 进程 $pid 仍存活，强制 SIGKILL" >&2
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done <<< "$all_pids"
 }

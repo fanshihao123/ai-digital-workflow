@@ -457,11 +457,13 @@ progress_finish() {
     local coverage="N/A" review_status="N/A"
     local test_report="$PROJECT_ROOT/specs/$feature/test-report.md"
     if [ -f "$test_report" ]; then
-      coverage=$(grep -oP 'Statements\s*\|\s*\K\d+%' "$test_report" 2>/dev/null || echo "N/A")
+      coverage=$(sed -n 's/.*Statements[[:space:]]*|[[:space:]]*\([0-9][0-9]*%\).*/\1/p' "$test_report" 2>/dev/null | head -1)
+      [ -z "$coverage" ] && coverage="N/A"
     fi
     local review_report="$PROJECT_ROOT/specs/$feature/review-report.md"
     if [ -f "$review_report" ]; then
-      review_status=$(grep -oP 'PASS|FAIL' "$review_report" 2>/dev/null | tail -1 || echo "N/A")
+      review_status=$(grep -o 'PASS\|FAIL' "$review_report" 2>/dev/null | tail -1)
+      [ -z "$review_status" ] && review_status="N/A"
     fi
 
     feishu_notify "🎉 **$feature** 流水线完成！\n$summary\n\n审查: $review_status | 覆盖率: $coverage" "$feature"

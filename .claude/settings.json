@@ -1,5 +1,16 @@
 {
   "permissions": {
-    "allow": []
+    "allow": [
+      "Bash(echo \"exit code: $?\")",
+      "Read(//Users/xiaofan/Desktop/ai-digital-workflow/**)",
+      "Bash(ps -o pid,lstart,command -p 61891)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('dev script:', d.get\\('scripts',{}\\).get\\('dev','NOT FOUND'\\)\\)\")",
+      "Bash(npm --prefix /Users/xiaofan/Desktop/ai-react-test run dev --help)",
+      "Bash(ps -Ao pid=,ppid=,command=)",
+      "Bash(bash -n /Users/xiaofan/Desktop/ai-digital-workflow/orchestrator/scripts/v4/lib/antigravity.sh)",
+      "Bash(bash -n /Users/xiaofan/Desktop/ai-digital-workflow/orchestrator/scripts/v4/steps/step2-develop.sh)",
+      "Bash(bash -n orchestrator/scripts/v4/lib/antigravity.sh)",
+      "Bash(echo \"EXIT: $?\")"
+    ]
   }
 }

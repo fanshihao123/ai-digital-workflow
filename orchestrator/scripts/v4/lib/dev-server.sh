@@ -19,10 +19,22 @@ _detect_dev_port() {
   echo "${port:-3000}"
 }
 
-# 检查 dev server 是否正在运行
+# 检查 dev server 是否正在运行（多级降级：curl → nc → lsof）
 _dev_server_running() {
   local port="$1"
-  lsof -i :"$port" | grep -q LISTEN 2>/dev/null
+  # 优先 curl：最通用，直接验证 HTTP 可达
+  if command -v curl &>/dev/null; then
+    curl -s -o /dev/null --connect-timeout 1 "http://localhost:${port}/" 2>/dev/null && return 0
+  fi
+  # 降级 nc：检测 TCP 端口开放
+  if command -v nc &>/dev/null; then
+    nc -z localhost "$port" 2>/dev/null && return 0
+  fi
+  # 降级 lsof
+  if command -v lsof &>/dev/null; then
+    lsof -i :"$port" 2>/dev/null | grep -q LISTEN 2>/dev/null && return 0
+  fi
+  return 1
 }
 
 # 等待 dev server 端口就绪（最多 60s）

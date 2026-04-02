@@ -123,6 +123,23 @@ PASS: false
 EOF
 }
 
+# 读取 UI 还原产物清单中所有文件（用于 Phase 3 审查）
+# 输出：每行一个相对路径
+_read_ui_artifacts() {
+  local feature_name="$1"
+  local artifact_file="$PROJECT_ROOT/specs/$feature_name/.ui-restore-artifacts.json"
+  [ -f "$artifact_file" ] || return 0
+  jq -r '.tasks[].files[]' "$artifact_file" 2>/dev/null | sort -u
+}
+
+# 检查指定 task 在产物清单中是否已标记
+_task_has_artifacts() {
+  local feature_name="$1"
+  local task_num="$2"
+  local artifact_file="$PROJECT_ROOT/specs/$feature_name/.ui-restore-artifacts.json"
+  [ -f "$artifact_file" ] && jq -e ".tasks[\"$task_num\"]" "$artifact_file" >/dev/null 2>&1
+}
+
 # 执行单个 antigravity 任务的分块还原
 # 返回: 0=通过(包括人工确认) 1=失败
 step2a_restore_task() {
@@ -131,6 +148,13 @@ step2a_restore_task() {
   local base_url="$3"
   local tasks_file="$PROJECT_ROOT/specs/$feature_name/tasks.md"
   local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  local artifact_file="$spec_dir/.ui-restore-artifacts.json"
+
+  # 初始化本 task 的产物记录（追加模式，多 task 共享同一文件）
+  if [ ! -f "$artifact_file" ]; then
+    echo '{"tasks":{}}' > "$artifact_file"
+  fi
+
   local score_threshold="${UI_RESTORE_SCORE_THRESHOLD:-8}"
   local report_batch="${UI_RESTORE_REPORT_BATCH_SIZE:-3}"
 
@@ -275,6 +299,68 @@ $design_spec
     _report_ui_progress "$feature_name" "$task_num" "$task_name" \
       "$block_total" "$block_total" "${block_results[@]}" "${needs_review[@]+"${needs_review[@]}"}"
   fi
+
+  # ── 先检查是否所有块都通过（未通过则不写产物、不标记 done）──
+  local has_review_needed=false
+  for r in "${block_results[@]}"; do
+    if echo "$r" | grep -q "NEEDS_REVIEW"; then
+      has_review_needed=true
+      break
+    fi
+  done
+
+  if [ "$has_review_needed" = "true" ] || [ ${#block_results[@]} -eq 0 ]; then
+    echo "  [ui-restorer] Task $task_num 有未通过的块，不标记 done" >&2
+    return 1
+  fi
+
+  # ── 记录产物清单（仅在所有块通过后才写入）──
+  local task_ui_files=""
+  if [ -n "$file_path" ]; then
+    if [ -d "$PROJECT_ROOT/$file_path" ]; then
+      task_ui_files=$(find "$PROJECT_ROOT/$file_path" -type f \( -name '*.tsx' -o -name '*.ts' -o -name '*.jsx' -o -name '*.js' -o -name '*.css' -o -name '*.scss' \) 2>/dev/null \
+        | sed "s|^$PROJECT_ROOT/||" | sort)
+    elif [ -f "$PROJECT_ROOT/$file_path" ]; then
+      task_ui_files="$file_path"
+    fi
+  fi
+  # 兜底：从 git diff 取本轮实际变更的 src 文件
+  if [ -z "$task_ui_files" ]; then
+    task_ui_files=$(git -C "$PROJECT_ROOT" diff --name-only HEAD -- 'src/**' 2>/dev/null \
+      | grep -E '\.(tsx?|jsx?|css|scss)$' | sort)
+  fi
+
+  # 写入 JSON 产物清单
+  local files_json="[]"
+  if [ -n "$task_ui_files" ]; then
+    files_json=$(printf '%s\n' "$task_ui_files" | jq -R . | jq -s .)
+  fi
+  local task_entry
+  task_entry=$(jq -n \
+    --arg tn "$task_num" \
+    --arg name "$task_name" \
+    --arg fp "$file_path" \
+    --argjson files "$files_json" \
+    --argjson blocks "$block_total" \
+    --argjson passed "${#block_results[@]}" \
+    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{name:$name, file_path:$fp, files:$files, blocks_total:$blocks, blocks_passed:$passed, timestamp:$ts}')
+
+  local tmp_artifact
+  tmp_artifact=$(mktemp)
+  jq --arg tn "$task_num" --argjson entry "$task_entry" \
+    '.tasks[$tn] = $entry' "$artifact_file" > "$tmp_artifact" 2>/dev/null \
+    && mv "$tmp_artifact" "$artifact_file" \
+    || rm -f "$tmp_artifact"
+
+  local ui_file_count=0
+  [ -n "$task_ui_files" ] && ui_file_count=$(printf '%s\n' "$task_ui_files" | wc -l | tr -d ' ')
+  echo "  [ui-restorer] Task $task_num 产物已记录: $ui_file_count 个文件" >&2
+
+  # ── 标记 task done（所有块已通过）──
+  sed -i.bak "/^### Task ${task_num}[：:]/,/^### Task [0-9]/ s/^- 状态：.*/- 状态：done/" "$tasks_file" 2>/dev/null || true
+  rm -f "${tasks_file}.bak"
+  echo "  [ui-restorer] Task $task_num 已标记为 done" >&2
 
   return 0
 }

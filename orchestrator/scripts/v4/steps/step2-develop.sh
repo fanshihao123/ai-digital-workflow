@@ -86,35 +86,72 @@ step2_sequential() {
     local base_url
     base_url=$(ensure_dev_server "$feature_name") || return 1
 
-    # 逐个执行 antigravity 任务
+    # 逐个执行 antigravity 任务（严格跟踪成功/失败）
     local task_nums
     task_nums=$(grep -n "agent: antigravity" "$tasks_file" 2>/dev/null \
       | while read -r line; do
           local lineno="${line%%:*}"
-          # 往上找最近的 ### Task N
           awk "NR<=$lineno" "$tasks_file" \
             | grep "^### Task [0-9]" | tail -1 \
             | grep -o "[0-9]*" | head -1
         done | sort -un)
 
+    local failed_tasks=""
+    local succeeded_tasks=""
     for task_num in $task_nums; do
-      step2a_restore_task "$feature_name" "$task_num" "$base_url" || {
-        echo "  ⚠️ Task $task_num 还原失败，继续下一个" >&2
-      }
+      if step2a_restore_task "$feature_name" "$task_num" "$base_url"; then
+        succeeded_tasks="$succeeded_tasks $task_num"
+      else
+        failed_tasks="$failed_tasks $task_num"
+        echo "  [Step 2a] Task $task_num 还原失败" >&2
+      fi
     done
 
-    notify "✅ Step 2a 完成: UI 还原结束，开始 Phase 3 Codex 审查" "$feature_name"
+    # 验证：所有 antigravity 任务必须在 tasks.md 中标记为 done
+    local undone_tasks=""
+    for task_num in $task_nums; do
+      if ! awk "/^### Task ${task_num}[：:]/,/^### Task [0-9]/" "$tasks_file" 2>/dev/null \
+           | grep -q "^- 状态：done"; then
+        undone_tasks="$undone_tasks $task_num"
+      fi
+    done
 
-    # Phase 3: Codex 代码规范审查（一轮）
+    if [ -n "$undone_tasks" ]; then
+      notify "❌ Step 2a 失败: Task${undone_tasks} 未完成，UI 还原中止" "$feature_name"
+      agent_notify \
+        "需求 '$feature_name' 的 UI 还原未完成。\n\n未完成的 Task:${undone_tasks}\n已完成的 Task:${succeeded_tasks:-无}\n\n请检查后重新执行。" \
+        "用户可以 /resume $feature_name 重试，或手动修改后继续" \
+        "$feature_name"
+      return 1
+    fi
+
+    # 验证：产物清单必须有记录
+    local ui_artifact_files
+    ui_artifact_files=$(_read_ui_artifacts "$feature_name")
+    if [ -z "$ui_artifact_files" ]; then
+      notify "❌ Step 2a 异常: 任务标记完成但无产物文件记录" "$feature_name"
+      return 1
+    fi
+
+    notify "✅ Step 2a 完成: UI 还原结束 ($(echo "$ui_artifact_files" | wc -l | tr -d ' ') 个 UI 文件)，开始 Phase 3 Codex 审查" "$feature_name"
+
+    # Phase 3: Codex 代码规范审查（一轮）—— 只审查 UI 产物文件
     echo "  [Step 2a] Phase 3: Codex 代码规范审查..." >&2
     if command -v codex >/dev/null 2>&1; then
-      local changed_files
-      changed_files=$(git -C "$PROJECT_ROOT" diff --name-only HEAD 2>/dev/null || echo "")
-      codex exec --full-auto "
+      # 从产物清单读取（不用 git diff，避免混入 .claude/ 等无关文件）
+      local ui_files_for_review
+      ui_files_for_review=$(_read_ui_artifacts "$feature_name")
+
+      if [ -z "$ui_files_for_review" ]; then
+        echo "  ⚠️ 产物清单为空，跳过 Codex 审查" >&2
+      else
+        echo "  [Step 2a] 审查范围: $(echo "$ui_files_for_review" | wc -l | tr -d ' ') 个 UI 文件" >&2
+
+        codex exec --full-auto "
 审查 Antigravity 生成的 UI 代码（代码规范审查，非视觉审查）。
 
-变更文件：
-$changed_files
+审查文件（仅以下文件，不要审查其他文件）：
+$ui_files_for_review
 
 审查清单：
 1. 是否有硬编码颜色/字号/间距（必须使用 design token / CSS 变量）
@@ -128,35 +165,38 @@ $changed_files
 
 输出格式：
 CODEX_VERDICT: PASS|FAIL
+REVIEWED_FILES:
+$(echo "$ui_files_for_review" | sed 's/^/  - /')
 ISSUES:
   - SEVERITY: WARNING|ERROR
     FILE: {文件路径}
     LINE: {行号}
     ISSUE: {问题描述}
     FIX: {修复建议}
-      " > "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null || true
+        " > "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null || true
 
-      local codex_verdict
-      codex_verdict=$(grep "^CODEX_VERDICT:" \
-        "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null \
-        | sed 's/CODEX_VERDICT:[[:space:]]*//' | tr -d ' \r')
+        local codex_verdict
+        codex_verdict=$(grep "^CODEX_VERDICT:" \
+          "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null \
+          | sed 's/CODEX_VERDICT:[[:space:]]*//' | tr -d ' \r')
 
-      if [ "$codex_verdict" = "FAIL" ]; then
-        local error_issues
-        error_issues=$(grep -A3 "SEVERITY: ERROR" \
-          "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null || echo "")
-        if [ -n "$error_issues" ]; then
-          echo "  [Step 2a] Codex 发现 ERROR 级问题，触发 Antigravity 修复..." >&2
-          antigravity_send_message \
-            "修复以下代码规范问题：
+        if [ "$codex_verdict" = "FAIL" ]; then
+          local error_issues
+          error_issues=$(grep -A3 "SEVERITY: ERROR" \
+            "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null || echo "")
+          if [ -n "$error_issues" ]; then
+            echo "  [Step 2a] Codex 发现 ERROR 级问题，触发 Antigravity 修复..." >&2
+            antigravity_send_message \
+              "修复以下代码规范问题：
 $error_issues
 严格按 FIX 建议修改，不要改其他代码。" "fast" || true
+          fi
+          local warning_issues
+          warning_issues=$(grep -A3 "SEVERITY: WARNING" \
+            "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null || echo "")
+          [ -n "$warning_issues" ] && \
+            notify "⚠️ UI Codex 审查警告（不阻塞）:\n$warning_issues" "$feature_name"
         fi
-        local warning_issues
-        warning_issues=$(grep -A3 "SEVERITY: WARNING" \
-          "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null || echo "")
-        [ -n "$warning_issues" ] && \
-          notify "⚠️ UI Codex 审查警告（不阻塞）:\n$warning_issues" "$feature_name"
       fi
     else
       echo "  ⚠️ codex 未安装，跳过 UI 代码规范审查" >&2
@@ -167,9 +207,43 @@ $error_issues
     echo "  ⚠️ 发现 antigravity 任务但 ENABLE_UI_RESTORER 未启用，使用 Claude Code 执行" >&2
   fi
 
+  # ── Step 2b 前置检查：antigravity 任务必须已完成 ──
+  if [ "$has_antigravity" -gt 0 ] && [ "${ENABLE_UI_RESTORER:-false}" = "true" ]; then
+    local pending_ag_tasks=""
+    local ag_task_nums
+    ag_task_nums=$(grep -n "agent: antigravity" "$tasks_file" 2>/dev/null \
+      | while read -r line; do
+          local lineno="${line%%:*}"
+          awk "NR<=$lineno" "$tasks_file" \
+            | grep "^### Task [0-9]" | tail -1 \
+            | grep -o "[0-9]*" | head -1
+        done | sort -un)
+    for tn in $ag_task_nums; do
+      if ! awk "/^### Task ${tn}[：:]/,/^### Task [0-9]/" "$tasks_file" 2>/dev/null \
+           | grep -q "^- 状态：done"; then
+        pending_ag_tasks="$pending_ag_tasks $tn"
+      fi
+    done
+    if [ -n "$pending_ag_tasks" ]; then
+      echo "  [Step 2b] ❌ antigravity 任务未完成 (Task${pending_ag_tasks})，不启动业务开发" >&2
+      notify "❌ Step 2b 阻断: UI 还原任务 (Task${pending_ag_tasks}) 未完成" "$feature_name"
+      return 1
+    fi
+  fi
+
   # ── Step 2b: claude-code 任务（业务逻辑，依赖 2a 产出）──
   echo "  [Step 2b] 执行 claude-code 任务..." >&2
   notify "💻 Step 2b: 开始业务逻辑开发" "$feature_name"
+
+  # 读取 antigravity 产物清单，告知 Step 2b 哪些文件已由 UI 还原生成
+  local ag_artifact_hint=""
+  local ag_files
+  ag_files=$(_read_ui_artifacts "$feature_name" 2>/dev/null)
+  if [ -n "$ag_files" ]; then
+    ag_artifact_hint="以下文件已由 Step 2a (Antigravity UI 还原) 生成，请勿重写或覆盖：
+$ag_files
+如需修改这些文件（如添加业务逻辑），仅做增量修改，不要重写 UI 结构。"
+  fi
 
   opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
     Read $tasks_file
@@ -178,8 +252,10 @@ $error_issues
     Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
     $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant company skills from $PROJECT_ROOT/.claude/company-skills/")
 
+    ${ag_artifact_hint}
+
     Execute all tasks marked 'agent: claude-code' (or with no agent tag) in tasks.md.
-    Skip tasks marked 'agent: antigravity' (already completed in Step 2a).
+    Skip tasks marked 'agent: antigravity' — they are already completed in Step 2a. Do NOT re-implement their UI output.
     Follow task dependencies. Mark each task as done after completion.
   " >&2
 
