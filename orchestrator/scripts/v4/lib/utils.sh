@@ -5,13 +5,13 @@
 # 模型选择（复用外部脚本）
 select_model() {
   local complexity="${1:-low}"
-  source "$SCRIPT_DIR/select-model.sh" "$complexity" >&2
+  source "$SCRIPT_DIR/../select-model.sh" "$complexity" >&2
   echo "$CLAUDE_MODEL"
 }
 
 # 加载公司 skills
 load_company_skills() {
-  bash "$SCRIPT_DIR/load-company-skills.sh" 2>/dev/null || true
+  bash "$SCRIPT_DIR/../load-company-skills.sh" 2>/dev/null || true
 }
 
 # 飞书通知（使用 common.sh 的安全函数）
@@ -91,10 +91,16 @@ detect_feature_name() {
     return
   fi
 
-  # fallback：如果还没有任何 spec 文件，再退回到最近的目录名
-  find "$PROJECT_ROOT/specs" -mindepth 1 -maxdepth 1 -type d \
-    ! -name 'archive' -print0 2>/dev/null | xargs -0 ls -td 2>/dev/null \
-    | head -1 | xargs basename 2>/dev/null || true
+  # fallback：仅当目录下确实存在 requirements.md 时才返回
+  # 避免空目录或只有 state.json 的旧目录导致误判
+  local fallback_dir
+  for fallback_dir in $(find "$PROJECT_ROOT/specs" -mindepth 1 -maxdepth 1 -type d \
+    ! -name 'archive' -print0 2>/dev/null | xargs -0 ls -td 2>/dev/null); do
+    if [ -s "$fallback_dir/requirements.md" ]; then
+      basename "$fallback_dir"
+      return
+    fi
+  done
 }
 
 # 从 design.md 提取复杂度（macOS 兼容）

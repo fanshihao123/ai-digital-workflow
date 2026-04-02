@@ -46,6 +46,14 @@ step1_spec_writer() {
     return 1
   fi
 
+  # 严格校验 Stage 1a 产物：requirements.md 必须存在且非空
+  local req_file="$PROJECT_ROOT/specs/$feature_name/requirements.md"
+  if [ ! -s "$req_file" ]; then
+    echo "  ❌ Stage 1a 产物校验失败: requirements.md 不存在或为空 ($req_file)" >&2
+    notify "❌ spec-writer 失败: requirements.md 未生成 ($feature_name)"
+    return 1
+  fi
+
   # Jira 同步
   jira_sync "requirements-done" "$feature_name" >&2
 
@@ -81,6 +89,17 @@ step1_spec_writer() {
     Execute spec-writer Stage 1b: generate design.md + tasks.md based on the confirmed requirements.md above.
     $([ "$is_hotfix" = "true" ] && echo "This is a /hotfix — generate tasks.md directly with minimal design")
   " >&2
+
+  # 严格校验 Stage 1b 产物：design.md 和 tasks.md 必须存在且非空
+  local design_file="$PROJECT_ROOT/specs/$feature_name/design.md"
+  local tasks_file="$PROJECT_ROOT/specs/$feature_name/tasks.md"
+  if [ ! -s "$design_file" ] || [ ! -s "$tasks_file" ]; then
+    echo "  ❌ Stage 1b 产物校验失败:" >&2
+    [ ! -s "$design_file" ] && echo "    - design.md 不存在或为空" >&2
+    [ ! -s "$tasks_file" ] && echo "    - tasks.md 不存在或为空" >&2
+    notify "❌ spec-writer 失败: design.md 或 tasks.md 未生成 ($feature_name)"
+    return 1
+  fi
 
   # 只有 hotfix 或简单任务允许跳过完整 spec 审查
   local complexity

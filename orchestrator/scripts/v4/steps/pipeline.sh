@@ -126,6 +126,17 @@ run_full_pipeline() {
     log "PIPELINE_PAUSED: 等待用户澄清" "$pipeline_log"
     return 0
   fi
+  # 再次校验三文档是否落盘（防止 step1 内部校验被绕过或 detect_feature_name 误判）
+  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  if [ ! -s "$spec_dir/requirements.md" ] || [ ! -s "$spec_dir/design.md" ] || [ ! -s "$spec_dir/tasks.md" ]; then
+    echo "❌ 流水线终止：spec 三文档未完整生成"
+    echo "  requirements.md: $([ -s "$spec_dir/requirements.md" ] && echo "OK" || echo "MISSING/EMPTY")"
+    echo "  design.md: $([ -s "$spec_dir/design.md" ] && echo "OK" || echo "MISSING/EMPTY")"
+    echo "  tasks.md: $([ -s "$spec_dir/tasks.md" ] && echo "OK" || echo "MISSING/EMPTY")"
+    feishu_notify "❌ 流水线终止: spec 三文档未完整生成 ($feature_name)" "$feature_name"
+    log "STEP_1_FAILED: spec 文件缺失 ($feature_name)" "$pipeline_log"
+    return 1
+  fi
   log "STEP_1_DONE: $feature_name ($(($(date +%s) - step_start))s)" "$pipeline_log"
 
   # 初始化进度面板（Step 0 和 1 已完成，从此处开始追踪）
