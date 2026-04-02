@@ -8,9 +8,16 @@ cmd_test() {
   if [ -n "$FEATURE" ]; then
     step4_test "$FEATURE"
   else
-    opencli claude --print --permission-mode bypassPermissions --model sonnet -p "
-      Read $PROJECT_ROOT/.claude/skills/test-runner/SKILL.md
-      Run all tests and generate report.
-    "
+    if command -v codex &>/dev/null; then
+      codex exec --full-auto "
+        Read $PROJECT_ROOT/.claude/skills/test-runner/SKILL.md (if exists)
+        Run all tests in $PROJECT_ROOT and generate a summary report.
+        Execute: typecheck, lint, build, unit tests, e2e tests (if available).
+        Print results to stdout.
+      "
+    else
+      echo "  ❌ codex 未安装，无法执行测试"
+      return 1
+    fi
   fi
 }

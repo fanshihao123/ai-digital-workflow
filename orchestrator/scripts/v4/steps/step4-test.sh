@@ -63,27 +63,38 @@ step4_fix_and_retry() {
     return 1
   fi
 
-  opencli claude --print --permission-mode bypassPermissions --model sonnet -p "
-    Read $PROJECT_ROOT/.claude/skills/test-runner/SKILL.md
-    Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
-    Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
-    Read $PROJECT_ROOT/specs/$feature_name/test-report.md
-    Read $PROJECT_ROOT/specs/$feature_name/tasks.md
+  if ! command -v codex &>/dev/null; then
+    echo "  ❌ codex 未安装，无法执行测试修复"
+    notify "❌ Step 4.5 失败: codex 未安装 ($feature_name)"
+    return 1
+  fi
 
-    Execute a single test-fix loop for feature '$feature_name':
-    1. Analyze the failing tests from test-report.md
-    2. Only fix blockers that make FEATURE_SCOPE_STATUS fail
-    3. Do not spend this loop fixing unrelated historical repo-wide debt
-    4. Apply the minimal patch
-    5. Re-run the most relevant feature-scope tests first
-    6. Re-run broader repo tests only to re-check whether debt remains non-blocking or has become a real regression
-    7. Update specs/$feature_name/test-report.md with the new result summary and machine-readable lines:
+  set +e
+  codex exec --full-auto "
+    你是 test-fixer，负责修复 feature '$feature_name' 的测试失败。
+
+    请读取以下文件：
+    - $PROJECT_ROOT/.claude/skills/test-runner/SKILL.md（如存在）
+    - $PROJECT_ROOT/.claude/CODING_GUIDELINES.md（如存在）
+    - $PROJECT_ROOT/.claude/ARCHITECTURE.md（如存在）
+    - $PROJECT_ROOT/specs/$feature_name/test-report.md
+    - $PROJECT_ROOT/specs/$feature_name/tasks.md
+
+    执行单次测试修复回路：
+    1. 分析 test-report.md 中的失败测试
+    2. 只修复导致 FEATURE_SCOPE_STATUS 失败的阻断项
+    3. 不要修复无关的历史全仓技术债
+    4. 应用最小化补丁
+    5. 重新运行 feature-scope 相关测试
+    6. 重新运行全仓测试，判断债务是否仍为非阻断
+    7. 更新 $test_report，保持原有报告格式，末尾必须包含机器可读行：
        FEATURE_SCOPE_STATUS: PASS|FAIL
        FULL_REPO_STATUS: PASS|FAIL|NOT_RUN
        REPO_DEBT_STATUS: PASS|FAIL|NOT_RUN
        WORKFLOW_VERDICT: PASS|FAIL
-    8. If tests still fail, clearly explain whether the blocker is in feature scope or historical debt
-  "
+    8. 如测试仍失败，清楚说明阻断项在 feature 范围还是历史债
+  " 2>&1
+  set -e
 
   workflow_verdict=$(extract_report_field "$test_report" "WORKFLOW_VERDICT")
   if [ "$workflow_verdict" = "FAIL" ]; then
