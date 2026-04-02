@@ -1,28 +1,5 @@
 {
   "permissions": {
-    "allow": [
-      "Bash(gh api:*)",
-      "Bash(curl -sL https://raw.githubusercontent.com/ShawnPana/smux/main/README.md)",
-      "Bash(curl -sL https://api.github.com/repos/ShawnPana/smux/contents/)",
-      "Bash(curl -sL https://api.github.com/repos/ShawnPana/smux/contents/scripts)",
-      "Bash(curl -sL https://api.github.com/repos/ShawnPana/smux/contents/skills)",
-      "Bash(curl -sL https://raw.githubusercontent.com/ShawnPana/smux/main/install.sh)",
-      "Bash(curl -sL https://raw.githubusercontent.com/ShawnPana/smux/main/.tmux.conf)",
-      "Bash(curl -sL https://raw.githubusercontent.com/ShawnPana/smux/main/scripts/tmux-bridge)",
-      "Bash(curl -sL https://api.github.com/repos/ShawnPana/smux/contents/skills/smux)",
-      "Bash(curl -sL https://raw.githubusercontent.com/ShawnPana/smux/main/skills/smux/SKILL.md)",
-      "Bash(chmod +x /Users/xiaofan/Desktop/ai-digital-workflow/orchestrator/scripts/feishu-handler.sh /Users/xiaofan/Desktop/ai-digital-workflow/orchestrator/scripts/v3/handler.sh)",
-      "Bash(wc -l orchestrator/scripts/v3/handler.sh orchestrator/scripts/v4/**/*.sh)",
-      "Bash(chmod +x /Users/xiaofan/Desktop/ai-digital-workflow/orchestrator/scripts/v4/lib/*.sh)",
-      "Bash(bash -n /Users/xiaofan/Desktop/ai-digital-workflow/orchestrator/scripts/v4/lib/utils.sh)",
-      "Bash(bash -n /Users/xiaofan/Desktop/ai-digital-workflow/orchestrator/scripts/v4/lib/clarification.sh)",
-      "Bash(bash -n /Users/xiaofan/Desktop/ai-digital-workflow/orchestrator/scripts/v4/lib/spec-review.sh)",
-      "Bash(bash -n /Users/xiaofan/Desktop/ai-digital-workflow/orchestrator/scripts/v4/lib/pause.sh)",
-      "Bash(bash -n /Users/xiaofan/Desktop/ai-digital-workflow/orchestrator/scripts/v4/lib/testing.sh)",
-      "Bash(chmod +x /Users/xiaofan/Desktop/ai-digital-workflow/orchestrator/scripts/v4/steps/*.sh)",
-      "Read(//Users/xiaofan/Desktop/ai-digital-workflow/**)",
-      "Bash(chmod +x orchestrator/scripts/v4/handler.sh orchestrator/scripts/v4/lib/*.sh orchestrator/scripts/v4/steps/*.sh orchestrator/scripts/v4/commands/*.sh)",
-      "Bash(find orchestrator/scripts/v4/ -name '*.sh' -exec wc -l {} +)"
-    ]
+    "allow": []
   }
 }

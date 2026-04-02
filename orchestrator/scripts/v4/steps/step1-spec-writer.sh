@@ -68,6 +68,7 @@ step1_spec_writer() {
   # ─────────────────────────────────────────────────────────────────────────
 
   # Stage 1b: requirements.md 无开放问题，继续生成 design.md + tasks.md
+  feishu_notify "✅ **[Stage 1a]** requirements.md 生成完毕，无开放问题\n⏳ **[Stage 1b]** 开始生成 design.md + tasks.md..." "$feature_name"
   echo "  [Stage 1b] Claude 生成 design.md + tasks.md..." >&2
   opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
     Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
@@ -100,7 +101,7 @@ step1_spec_writer() {
 
   # Stage 2: OpenAI Codex 审查
   echo "  [Stage 2] OpenAI Codex 审查..." >&2
-  notify "🟣 Step 1 / Stage 2: 开始 Codex spec 审查 ($feature_name)"
+  feishu_notify "✅ **[Stage 1b]** design.md + tasks.md 生成完毕 (${task_count} 个任务, complexity: $complexity)\n⏳ **[Stage 2]** 开始 Codex spec 审查..." "$feature_name"
   if command -v codex &> /dev/null; then
     codex exec --full-auto "
       你是一个资深技术架构师，负责审查以下 spec 文档的质量。
@@ -130,6 +131,7 @@ step1_spec_writer() {
   fi
 
   # Stage 3: Claude 复审 + 定稿
+  feishu_notify "✅ **[Stage 2]** Codex 审查完毕\n⏳ **[Stage 3]** Claude 复审 + 定稿..." "$feature_name"
   echo "  [Stage 3] Claude 复审 + 定稿..." >&2
   if [ -f "$PROJECT_ROOT/specs/$feature_name/spec-review.md" ]; then
     model=$(select_model "$complexity")
@@ -192,6 +194,7 @@ step1_spec_writer() {
     fi
   fi
 
+  progress_substep "$feature_name" 1 "Stage 3: Claude 复审定稿" "done"
   notify "✅ Step 1 完成: 已生成并复审 spec ($feature_name)"
   echo "$feature_name"
 }

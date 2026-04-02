@@ -31,6 +31,7 @@ source "$SCRIPT_DIR/lib/doc-sync.sh"
 source "$SCRIPT_DIR/lib/dev-server.sh"
 source "$SCRIPT_DIR/lib/antigravity.sh"
 source "$SCRIPT_DIR/lib/integrations.sh"
+source "$SCRIPT_DIR/lib/progress.sh"
 
 # steps（流水线阶段）
 source "$SCRIPT_DIR/steps/step0-prepare.sh"
@@ -64,15 +65,52 @@ cleanup() {
   local exit_code=$?
   if [ $exit_code -ne 0 ] && [ "$_NOTIFIED_ERROR" = "false" ]; then
     _NOTIFIED_ERROR=true
-    local feature
-    feature=$(detect_feature_name)
-    if [ -n "$feature" ]; then
-      pipeline_state_set "$feature" "last_run" "failed"
+
+    # 安全获取 feature（模块可能尚未加载）
+    local feature=""
+    if type detect_feature_name >/dev/null 2>&1; then
+      feature=$(detect_feature_name 2>/dev/null || true)
+    fi
+
+    local error_msg="流水线异常退出（exit code: $exit_code）"
+    [ -n "$feature" ] && error_msg="需求 '$feature' 的${error_msg}，可执行 /resume $feature 从断点继续。"
+
+    # 写日志（即使模块未加载也尝试）
+    if [ -d "$PROJECT_ROOT/specs" ]; then
+      echo "[$(date '+%H:%M:%S')] PIPELINE_FAILED: ${feature:-unknown} (exit code: $exit_code)" \
+        >> "$PROJECT_ROOT/specs/.workflow-log" 2>/dev/null || true
+    fi
+
+    # 记录 pipeline 状态
+    if [ -n "$feature" ] && type pipeline_state_set >/dev/null 2>&1; then
+      pipeline_state_set "$feature" "last_run" "failed" 2>/dev/null || true
+    fi
+
+    # 发送通知（优先 agent_notify，降级到 feishu_notify，再降级到 openclaw 直接调用）
+    if [ -n "$feature" ] && type agent_notify >/dev/null 2>&1; then
       agent_notify \
-        "需求 '$feature' 的流水线异常退出（exit code: $exit_code），可执行 /resume $feature 从断点继续。" \
+        "$error_msg" \
         "需要我帮你排查原因吗？还是直接 /resume $feature 继续？" \
-        "$feature"
-      log "PIPELINE_FAILED: $feature (exit code: $exit_code)" "$PROJECT_ROOT/specs/.workflow-log"
+        "$feature" 2>/dev/null || true
+    elif type feishu_notify >/dev/null 2>&1; then
+      feishu_notify "❌ $error_msg" "${feature:-unknown}" 2>/dev/null || true
+    else
+      # 最后兜底：模块全未加载，直接用 openclaw/webhook 通知
+      local _oc_bin="${OPENCLAW_BIN:-}"
+      [ -z "$_oc_bin" ] && _oc_bin=$(command -v openclaw 2>/dev/null || true)
+      if [ -n "$_oc_bin" ] && [ -x "$_oc_bin" ] && [ -n "${FEISHU_NOTIFY_TARGET:-}" ]; then
+        "$_oc_bin" message send \
+          --channel feishu \
+          --target "$FEISHU_NOTIFY_TARGET" \
+          --message "[🤖 AI Workforce] ❌ $error_msg" \
+          > /dev/null 2>&1 || true
+      elif [ -n "${FEISHU_WEBHOOK_URL:-}" ]; then
+        curl -s -X POST "$FEISHU_WEBHOOK_URL" \
+          -H "Content-Type: application/json" \
+          --max-time 5 \
+          -d "$(printf '{"msg_type":"text","content":{"text":"[AI Workforce] ❌ %s"}}' "$error_msg")" \
+          > /dev/null 2>&1 || true
+      fi
     fi
   fi
 }

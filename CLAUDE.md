@@ -302,6 +302,13 @@ SCORE < 8 → 人工确认节点（agent_notify 发飞书附截图）
 
 覆盖率阈值：Statements 80%、Branches 75%、Functions 80%。**特性范围测试与全仓库历史债务分离**——新特性测试必须通过，历史债务不阻塞新功能。
 
+## Recent Improvements (2026-04-02)
+
+### bash 3.2 兼容性修复 + 异常通知强化
+- **state.sh 关联数组替换**: `declare -A STATE_TRANSITIONS` 改为 `_state_transition_lookup()` 函数（`case` 语句），修复 macOS 默认 bash 3.2 下 `unbound variable` 崩溃
+- **cleanup trap 三级降级通知**: handler.sh 的错误处理增加 `type` 检查，即使模块加载阶段崩溃（source 失败），也能逐级降级发出飞书通知：`agent_notify` → `feishu_notify` → 直接调用 `openclaw message send` / `curl webhook`
+- **pipeline.sh 通知修复**: spec-writer 失败时 `notify` 调用改为 `feishu_notify`，补全 feature_name 参数，确保通知能发出
+
 ## Recent Improvements (2026-04-01)
 
 ### feishu-handler.sh v4 模块化拆分

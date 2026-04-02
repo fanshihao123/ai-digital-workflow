@@ -1,0 +1,5 @@
+# Local Claude Code settings (contains user-specific permissions)
+.claude/settings.local.json
+
+# Environment variables
+.env.ai-digital-workflow

@@ -57,6 +57,11 @@ fi
 
 chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/"*.sh 2>/dev/null || true
 chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/lib/"*.sh 2>/dev/null || true
+chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/v4/"*.sh 2>/dev/null || true
+chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/v4/lib/"*.sh 2>/dev/null || true
+chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/v4/steps/"*.sh 2>/dev/null || true
+chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/v4/commands/"*.sh 2>/dev/null || true
+chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/v3/"*.sh 2>/dev/null || true
 chmod +x "$PROJECT_ROOT/.claude/extensions/"*/scripts/*.sh 2>/dev/null || true
 
 echo "-- 安装 slash commands..."

@@ -30,30 +30,37 @@
 # 格式: "from_status:command" → allowed
 # ============================================================
 
-declare -A STATE_TRANSITIONS=(
-  # 正常流水线推进
-  ["idle:start"]="running"
-  ["running:step"]="running"
-  ["running:pause"]="paused"
-  ["running:fail"]="failed"
-  ["running:done"]="done"
+# 状态转移查询函数（兼容 bash 3.2，不依赖 declare -A）
+# 返回目标状态，无匹配则返回空字符串
+_state_transition_lookup() {
+  local key="$1"
+  case "$key" in
+    # 正常流水线推进
+    idle:start)           echo "running" ;;
+    running:step)         echo "running" ;;
+    running:pause)        echo "paused" ;;
+    running:fail)         echo "failed" ;;
+    running:done)         echo "done" ;;
 
-  # 自动暂停（开放问题 / spec 审查阻断）
-  ["running:await-answer"]="awaiting-answer"
-  ["running:await-fix"]="awaiting-fix"
+    # 自动暂停（开放问题 / spec 审查阻断）
+    running:await-answer) echo "awaiting-answer" ;;
+    running:await-fix)    echo "awaiting-fix" ;;
 
-  # 用户恢复命令
-  ["awaiting-answer:answer"]="running"
-  ["awaiting-fix:fix-spec"]="running"
-  ["paused:restart"]="running"
-  ["failed:resume"]="running"
+    # 用户恢复命令
+    awaiting-answer:answer) echo "running" ;;
+    awaiting-fix:fix-spec)  echo "running" ;;
+    paused:restart)         echo "running" ;;
+    failed:resume)          echo "running" ;;
 
-  # 从暂停态也可以 resume（等同于 restart）
-  ["paused:resume"]="running"
+    # 从暂停态也可以 resume（等同于 restart）
+    paused:resume)          echo "running" ;;
 
-  # done 态可以重新启动
-  ["done:start"]="running"
-)
+    # done 态可以重新启动
+    done:start)             echo "running" ;;
+
+    *) echo "" ;;
+  esac
+}
 
 # ============================================================
 # 核心 API
@@ -132,7 +139,8 @@ state_transition() {
   local current
   current=$(state_get "$feature")
   local key="${current}:${command}"
-  local target="${STATE_TRANSITIONS[$key]:-}"
+  local target
+  target=$(_state_transition_lookup "$key")
 
   if [ -z "$target" ]; then
     echo "❌ 非法状态转移: '$feature' 当前状态 '$current'，不允许执行 '$command'" >&2
@@ -177,7 +185,7 @@ state_can() {
   local command="$2"
   local current
   current=$(state_get "$feature")
-  [ -n "${STATE_TRANSITIONS[${current}:${command}]:-}" ]
+  [ -n "$(_state_transition_lookup "${current}:${command}")" ]
 }
 
 # 设置当前 step（流水线推进时调用）
