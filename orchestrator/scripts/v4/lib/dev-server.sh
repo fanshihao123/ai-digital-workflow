@@ -22,17 +22,17 @@ _detect_dev_port() {
 # 检查 dev server 是否正在运行（多级降级：curl → nc → lsof）
 _dev_server_running() {
   local port="$1"
-  # 优先 curl：最通用，直接验证 HTTP 可达
+  # 优先 curl：最通用，直接验证 HTTP 可达（加总超时，避免静默挂住）
   if command -v curl &>/dev/null; then
-    curl -s -o /dev/null --connect-timeout 1 "http://localhost:${port}/" 2>/dev/null && return 0
+    perl -e 'alarm shift @ARGV; exec @ARGV' 3 curl -s -o /dev/null --connect-timeout 1 --max-time 2 "http://localhost:${port}/" 2>/dev/null && return 0
   fi
   # 降级 nc：检测 TCP 端口开放
   if command -v nc &>/dev/null; then
-    nc -z localhost "$port" 2>/dev/null && return 0
+    perl -e 'alarm shift @ARGV; exec @ARGV' 3 nc -z localhost "$port" 2>/dev/null && return 0
   fi
   # 降级 lsof
   if command -v lsof &>/dev/null; then
-    lsof -i :"$port" 2>/dev/null | grep -q LISTEN 2>/dev/null && return 0
+    perl -e 'alarm shift @ARGV; exec @ARGV' 3 bash -lc 'lsof -i :"$1" 2>/dev/null | grep -q LISTEN 2>/dev/null' _ "$port" && return 0
   fi
   return 1
 }
@@ -57,9 +57,12 @@ _wait_dev_server() {
 ensure_dev_server() {
   local feature_name="$1"
   local port
+  echo "  [dev-server][debug] before _detect_dev_port" >&2
   port=$(_detect_dev_port)
+  echo "  [dev-server][debug] after _detect_dev_port: ${port}" >&2
   local base_url="http://localhost:${port}"
 
+  echo "  [dev-server][debug] before _dev_server_running check" >&2
   if _dev_server_running "$port"; then
     echo "  [dev-server] 已在端口 $port 运行" >&2
     notify "dev server 已在 $base_url 运行" "$feature_name"
@@ -71,11 +74,15 @@ ensure_dev_server() {
   local log_file="/tmp/devserver-${feature_name}.log"
 
   # 后台启动
+  echo "  [dev-server][debug] before nohup npm run dev" >&2
   nohup npm --prefix "$PROJECT_ROOT" run dev \
     > "$log_file" 2>&1 &
+  echo "  [dev-server][debug] after nohup npm run dev" >&2
 
   echo "  [dev-server] 等待端口 $port 就绪（最多 60s）..." >&2
+  echo "  [dev-server][debug] before _wait_dev_server" >&2
   if _wait_dev_server "$port"; then
+    echo "  [dev-server][debug] after _wait_dev_server success" >&2
     echo "  [dev-server] 启动成功: $base_url" >&2
     notify "dev server 已启动: $base_url\n日志: $log_file" "$feature_name"
     echo "$base_url"

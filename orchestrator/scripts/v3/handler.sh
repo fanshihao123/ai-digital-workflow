@@ -1269,14 +1269,29 @@ ensure_dev_server() {
 # Step 2a: Antigravity UI 还原（显式两阶段：先 antigravity，再 claude-code）
 # ============================================================
 
+# 提取 Task N 的完整正文（从标题行的下一行开始，到下一个 ### Task 标题之前）
+# 修复：旧版 awk range 模式 /^### Task N/,/^### Task [0-9]/ 会在标题行同时
+# 命中起始和结束条件，导致区间立即关闭，正文全部丢失。
+_extract_task_body() {
+  local tasks_file="$1"
+  local task_num="$2"
+  awk -v tn="$task_num" '
+    BEGIN { found=0 }
+    /^### Task / {
+      if (found) exit
+      if ($0 ~ "^### Task " tn "[：:]") { found=1; next }
+    }
+    found { print }
+  ' "$tasks_file" 2>/dev/null
+}
+
 # 提取 tasks.md 中所有 antigravity 任务的字段值
 # 用法: extract_task_field <tasks_file> <task_number> <field>
 extract_task_field() {
   local tasks_file="$1"
   local task_num="$2"
   local field="$3"
-  # 提取从 ### Task {N} 开始到下一个 ### Task 之间的内容，再取字段值
-  awk "/^### Task ${task_num}[：:]/,/^### Task [0-9]/" "$tasks_file" 2>/dev/null \
+  _extract_task_body "$tasks_file" "$task_num" \
     | grep "^- ${field}:" \
     | head -1 \
     | sed "s/^- ${field}:[[:space:]]*//"
@@ -1424,7 +1439,7 @@ step2a_restore_task() {
 
   # 读取分块策略
   local blocks_raw
-  blocks_raw=$(awk "/^### Task ${task_num}[：:]/,/^### Task [0-9]/" "$tasks_file" 2>/dev/null \
+  blocks_raw=$(_extract_task_body "$tasks_file" "$task_num" \
     | grep "^  - 块" | sed 's/^  - //')
   local block_total
   block_total=$(echo "$blocks_raw" | grep -c "块" || echo 1)
@@ -1433,8 +1448,8 @@ step2a_restore_task() {
 
   # 读取设计规格（整块提取）
   local design_spec
-  design_spec=$(awk "/^### Task ${task_num}[：:]/,/^### Task [0-9]/" "$tasks_file" 2>/dev/null \
-    | awk '/^- 设计规格：/,/^- [^ ]/' \
+  design_spec=$(_extract_task_body "$tasks_file" "$task_num" \
+    | awk '/^- 设计规格[：:]/,/^- [^ ]/' \
     | grep -v "^- 还原策略" | grep -v "^- 指令")
 
   local block_results=()   # 记录每块结果 "block_name:score:screenshot"

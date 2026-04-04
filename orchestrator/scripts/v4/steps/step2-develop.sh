@@ -80,11 +80,22 @@ step2_sequential() {
   # ── Step 2a: Antigravity UI 还原（显式优先执行）──
   if [ "$has_antigravity" -gt 0 ] && [ "${ENABLE_UI_RESTORER:-false}" = "true" ]; then
     echo "  [Step 2a] 检测到 $has_antigravity 个 antigravity 任务，开始 UI 还原" >&2
+    echo "  [Step 2a][debug] before notify" >&2
     notify "🎨 Step 2a: 开始 UI 还原 ($has_antigravity 个任务)" "$feature_name"
+    echo "  [Step 2a][debug] after notify" >&2
 
     # Phase 0: 确保 dev server 运行
     local base_url
+    echo "  [Step 2a][debug] before ensure_dev_server" >&2
     base_url=$(ensure_dev_server "$feature_name") || return 1
+    echo "  [Step 2a][debug] after ensure_dev_server: $base_url" >&2
+
+    # Figma MCP 日志：Step 2a 开始
+    echo "  [Step 2a][debug] before figma_mcp_log step2a_start" >&2
+    local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+    figma_mcp_log "$spec_dir" "step2a_start" "$(jq -n \
+      --arg feature "$feature_name" --argjson count "$has_antigravity" --arg base_url "$base_url" \
+      '{feature: $feature, antigravity_task_count: $count, base_url: $base_url}')"
 
     # 逐个执行 antigravity 任务（严格跟踪成功/失败）
     local task_nums
@@ -98,30 +109,77 @@ step2_sequential() {
 
     local failed_tasks=""
     local succeeded_tasks=""
+    # Per-task diagnostics: parallel arrays
+    local -a task_reasons=()
+    local -a task_failed_blocks=()
+    local task_log_file=""
+
     for task_num in $task_nums; do
       if step2a_restore_task "$feature_name" "$task_num" "$base_url"; then
         succeeded_tasks="$succeeded_tasks $task_num"
       else
         failed_tasks="$failed_tasks $task_num"
-        echo "  [Step 2a] Task $task_num 还原失败" >&2
+        task_reasons+=("Task${task_num}:${UI_RESTORE_LAST_REASON:-UNKNOWN}")
+        task_failed_blocks+=("Task${task_num}:${UI_RESTORE_LAST_FAILED_BLOCKS:-}")
+        task_log_file="${UI_RESTORE_LAST_LOG:-}"
+        echo "  [Step 2a] Task $task_num 还原失败: reason=${UI_RESTORE_LAST_REASON:-UNKNOWN} blocks=${UI_RESTORE_LAST_FAILED_BLOCKS:-none}" >&2
       fi
     done
+
+    local restore_log_path="specs/$feature_name/ui-restore-log.json"
 
     # 验证：所有 antigravity 任务必须在 tasks.md 中标记为 done
     local undone_tasks=""
     for task_num in $task_nums; do
-      if ! awk "/^### Task ${task_num}[：:]/,/^### Task [0-9]/" "$tasks_file" 2>/dev/null \
+      if ! _extract_task_body "$tasks_file" "$task_num" \
            | grep -q "^- 状态：done"; then
         undone_tasks="$undone_tasks $task_num"
       fi
     done
 
     if [ -n "$undone_tasks" ]; then
-      notify "❌ Step 2a 失败: Task${undone_tasks} 未完成，UI 还原中止" "$feature_name"
+      # Build structured failure detail for notification
+      local failure_detail=""
+      for r in "${task_reasons[@]}"; do
+        local r_task="${r%%:*}"
+        local r_reason="${r#*:}"
+        failure_detail="${failure_detail}\n${r_task}: ${r_reason}"
+      done
+      for fb in "${task_failed_blocks[@]}"; do
+        local fb_task="${fb%%:*}"
+        local fb_blocks="${fb#*:}"
+        [ -n "$fb_blocks" ] && failure_detail="${failure_detail}\n  Failed blocks: ${fb_blocks}"
+      done
+
+      # P1-5: 诊断分类提示
+      local diag_hint=""
+      for r in "${task_reasons[@]}"; do
+        local r_reason="${r#*:}"
+        case "$r_reason" in
+          UI_RESTORE_PREVIEW_ROUTE_INVALID)
+            diag_hint="${diag_hint}\n💡 预览路由不存在/渲染为 404。检查 App.tsx 路由注册和占位页面生成。" ;;
+          UI_RESTORE_PREVIEW_ROUTE_SETUP_FAILED)
+            diag_hint="${diag_hint}\n💡 预览路由自动注册失败。检查 App.tsx 格式是否可被 sed 解析。" ;;
+          UI_RESTORE_NO_BLOCK_RESULTS)
+            diag_hint="${diag_hint}\n💡 分块解析产出零结果。检查 tasks.md 的「还原策略」格式。" ;;
+          UI_RESTORE_BLOCK_SCORE_FAILED)
+            diag_hint="${diag_hint}\n💡 分块评分未达标。可能原因：Antigravity 未返回有效回复、未修改目标文件、页面仍为 fallback。查看 ui-restore-log.json 和 figma-mcp-log.json。" ;;
+          UI_RESTORE_ARTIFACT_RECORD_FAILED)
+            diag_hint="${diag_hint}\n💡 评分通过但未检测到产物文件。Antigravity 可能回复了但未写入磁盘。" ;;
+        esac
+      done
+
+      notify "❌ Step 2a 失败: Task${undone_tasks} 未完成\n${failure_detail}${diag_hint}\nSee: ${restore_log_path}" "$feature_name"
       agent_notify \
-        "需求 '$feature_name' 的 UI 还原未完成。\n\n未完成的 Task:${undone_tasks}\n已完成的 Task:${succeeded_tasks:-无}\n\n请检查后重新执行。" \
+        "需求 '$feature_name' 的 UI 还原未完成。\n\n未完成的 Task:${undone_tasks}\n已完成的 Task:${succeeded_tasks:-无}\n\n失败诊断:${failure_detail}${diag_hint}\n\nFigma MCP 日志: specs/$feature_name/figma-mcp-log.json\n详细日志: ${restore_log_path}\n截图路径: /tmp/ui-restore-${feature_name}-*\n\n请检查后重新执行。" \
         "用户可以 /resume $feature_name 重试，或手动修改后继续" \
         "$feature_name"
+
+      # Figma MCP 日志：Step 2a 失败
+      figma_mcp_log "$spec_dir" "step2a_fail" "$(jq -n \
+        --arg undone "$undone_tasks" --arg succeeded "${succeeded_tasks:-}" \
+        '{undone_tasks: $undone, succeeded_tasks: $succeeded}')"
+
       return 1
     fi
 
@@ -129,7 +187,7 @@ step2_sequential() {
     local ui_artifact_files
     ui_artifact_files=$(_read_ui_artifacts "$feature_name")
     if [ -z "$ui_artifact_files" ]; then
-      notify "❌ Step 2a 异常: 任务标记完成但无产物文件记录" "$feature_name"
+      notify "❌ Step 2a 异常: 任务标记完成但无产物文件记录\nSee: ${restore_log_path}" "$feature_name"
       return 1
     fi
 
@@ -219,7 +277,7 @@ $error_issues
             | grep -o "[0-9]*" | head -1
         done | sort -un)
     for tn in $ag_task_nums; do
-      if ! awk "/^### Task ${tn}[：:]/,/^### Task [0-9]/" "$tasks_file" 2>/dev/null \
+      if ! _extract_task_body "$tasks_file" "$tn" \
            | grep -q "^- 状态：done"; then
         pending_ag_tasks="$pending_ag_tasks $tn"
       fi

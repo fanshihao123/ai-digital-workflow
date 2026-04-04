@@ -14,11 +14,16 @@ load_company_skills() {
   bash "$SCRIPT_DIR/../load-company-skills.sh" 2>/dev/null || true
 }
 
-# 飞书通知（使用 common.sh 的安全函数）
+# 飞书通知（后台 fire-and-forget + 超时保护，避免通知链卡死主流程）
 notify() {
   local message="$1"
   local feature="${2:-$(detect_feature_name)}"
-  feishu_notify "$message" "$feature"
+  if type feishu_notify >/dev/null 2>&1; then
+    (
+      perl -e 'alarm shift @ARGV; exec @ARGV' 5 bash -lc 'feishu_notify "$1" "$2"' _ "$message" "$feature" >/dev/null 2>&1 || true
+    ) >/dev/null 2>&1 &
+  fi
+  return 0
 }
 
 count_pattern_in_file() {
