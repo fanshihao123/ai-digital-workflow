@@ -4,7 +4,7 @@
 
 extract_feature_scopes() {
   local feature_name="$1"
-  local tasks_file="$PROJECT_ROOT/specs/$feature_name/tasks.md"
+  local tasks_file="$WORKFLOW_DATA_DIR/$feature_name/tasks.md"
   local declared_scopes=""
 
   if [ -f "$tasks_file" ]; then
@@ -97,7 +97,7 @@ extract_feature_tests() {
 
 run_local_test() {
   local feature_name="$1"
-  local test_report="$PROJECT_ROOT/specs/$feature_name/test-report.md"
+  local test_report="$WORKFLOW_DATA_DIR/$feature_name/test-report.md"
   local feature_tests
   local feature_scopes
   local feature_file=""

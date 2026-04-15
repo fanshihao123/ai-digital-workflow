@@ -12,7 +12,7 @@ description: >
 
 同时满足才激活：
 1. `.env` 中 `ENABLE_WORKTREE_PARALLEL=true`
-2. `specs/{feature-name}/design.md` 中 `complexity: high`
+2. `$WORKFLOW_DATA_DIR/{feature-name}/design.md` 中 `complexity: high`
 
 未启用时，编排器跳过此扩展，走顺序执行。
 

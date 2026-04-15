@@ -181,7 +181,7 @@
     ┌───────────────────────────────┐
     │  Step 5: doc-syncer            │
     │  - 更新 .claude/ 项目文档       │
-    │  - 归档到 specs/archive/       │
+    │  - 归档到 $WORKFLOW_DATA_DIR/archive/       │
     │  - 更新 ITERATIONS.md          │
     └───────────────┬───────────────┘
                     ▼
@@ -203,7 +203,7 @@
 
 ## 4. 状态机：feature 生命周期
 
-v4 用 `specs/{feature}/state.json` 统一管理状态，替代散落的 json 文件。
+v4 用 `$WORKFLOW_DATA_DIR/{feature}/state.json` 统一管理状态，替代散落的 json 文件。
 
 ```
                         /start-workflow

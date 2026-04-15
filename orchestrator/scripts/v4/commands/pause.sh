@@ -4,7 +4,7 @@
 
 cmd_pause() {
   local feature_name="$1"
-  local pipeline_log="$PROJECT_ROOT/specs/.workflow-log"
+  local pipeline_log="$WORKFLOW_DATA_DIR/.workflow-log"
 
   if [ -z "$feature_name" ]; then
     feature_name=$(detect_feature_name)
@@ -18,7 +18,7 @@ cmd_pause() {
     return 1
   fi
 
-  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  local spec_dir="$WORKFLOW_DATA_DIR/$feature_name"
   if [ ! -d "$spec_dir" ]; then
     echo "❌ 未找到 specs 目录: $spec_dir"
     return 1
@@ -72,6 +72,6 @@ cmd_pause() {
   log "PIPELINE_PAUSED_BY_USER: $feature_name at step $paused_step" "$pipeline_log"
   notify "⏸️ 工作流已手动暂停 (断点 Step $paused_step): $feature_name"
   echo "⏸️ 已暂停 '$feature_name'（断点 Step $paused_step）"
-  echo "   - 如需改需求: 编辑 specs/$feature_name/requirements.md，然后 /restart $feature_name"
+  echo "   - 如需改需求: 编辑 $WORKFLOW_DATA_DIR/$feature_name/requirements.md，然后 /restart $feature_name"
   echo "   - 不改需求:  直接 /restart $feature_name"
 }

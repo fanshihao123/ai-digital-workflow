@@ -31,7 +31,7 @@ cmd_answer_clarification() {
   mark_clarification_answered "$feature_name" "$answers"
 
   notify "▶️ 收到澄清，重新生成 spec: $feature_name"
-  log "STEP_1_RESUME: $feature_name (用户提供澄清)" "$PROJECT_ROOT/specs/.workflow-log"
+  log "STEP_1_RESUME: $feature_name (用户提供澄清)" "$WORKFLOW_DATA_DIR/.workflow-log"
 
   # Stage 1a 恢复：仅更新 requirements.md（融入用户澄清，design/tasks 尚未生成）
   local model
@@ -43,9 +43,9 @@ cmd_answer_clarification() {
     Read $PROJECT_ROOT/.claude/SECURITY.md
     Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
     $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
-    Read $PROJECT_ROOT/specs/$feature_name/requirements.md
+    Read $WORKFLOW_DATA_DIR/$feature_name/requirements.md
 
-    用户已为开放问题提供澄清，请仅覆写 specs/$feature_name/requirements.md：
+    用户已为开放问题提供澄清，请仅覆写 $WORKFLOW_DATA_DIR/$feature_name/requirements.md：
     原始需求: $original_input
     用户澄清答复: $answers
 
@@ -58,7 +58,7 @@ cmd_answer_clarification() {
   " >&2
 
   # 清理状态文件（答复已消费）
-  rm -f "$PROJECT_ROOT/specs/$feature_name/awaiting-clarification.json"
+  rm -f "$WORKFLOW_DATA_DIR/$feature_name/awaiting-clarification.json"
 
   # 再次检查是否仍有未解决的开放问题
   local remaining_questions
@@ -69,7 +69,7 @@ cmd_answer_clarification() {
     echo "  [clarification] 仍有 $rq_count 个未解决的开放问题，再次暂停" >&2
     save_clarification_state "$feature_name" "$original_input" "$remaining_questions"
     notify_open_questions "$feature_name" "$remaining_questions"
-    log "STEP_1_PAUSED: $feature_name ($rq_count 开放问题，第2轮)" "$PROJECT_ROOT/specs/.workflow-log"
+    log "STEP_1_PAUSED: $feature_name ($rq_count 开放问题，第2轮)" "$WORKFLOW_DATA_DIR/.workflow-log"
     return 0
   fi
 
@@ -82,7 +82,7 @@ cmd_answer_clarification() {
     Read $PROJECT_ROOT/.claude/SECURITY.md
     Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
     $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
-    Read $PROJECT_ROOT/specs/$feature_name/requirements.md
+    Read $WORKFLOW_DATA_DIR/$feature_name/requirements.md
     Execute spec-writer Stage 1b: generate design.md + tasks.md based on the confirmed requirements.md above.
   " >&2
 
@@ -92,7 +92,7 @@ cmd_answer_clarification() {
   local complexity
   complexity=$(get_complexity "$feature_name")
   local task_count
-  task_count=$(grep -c "^### Task" "$PROJECT_ROOT/specs/$feature_name/tasks.md" 2>/dev/null || echo 0)
+  task_count=$(grep -c "^### Task" "$WORKFLOW_DATA_DIR/$feature_name/tasks.md" 2>/dev/null || echo 0)
 
   if [ "$task_count" -le 2 ] && [ "$complexity" = "low" ]; then
     notify "🟡 Step 1 完成（澄清后，简单任务跳过 Codex）: $feature_name"
@@ -100,32 +100,32 @@ cmd_answer_clarification() {
     # Stage 2: Codex 审查
     echo "  [Stage 2] Codex 审查（澄清后）..." >&2
     codex exec --full-auto "
-      审查 specs/$feature_name/ 下 requirements.md + design.md + tasks.md（13维度 R1-R4,D1-D4,T1-T5）
+      审查 $WORKFLOW_DATA_DIR/$feature_name/ 下 requirements.md + design.md + tasks.md（13维度 R1-R4,D1-D4,T1-T5）
       输出格式: DIMENSION/VERDICT/DETAIL/SUGGESTION，最后 OVERALL/CRITICAL_ISSUES
-    " > "$PROJECT_ROOT/specs/$feature_name/spec-review.md" 2>/dev/null || \
+    " > "$WORKFLOW_DATA_DIR/$feature_name/spec-review.md" 2>/dev/null || \
       echo "  ⚠️ Codex 审查失败，跳过 Stage 2" >&2
 
     # Stage 3: Claude 复审定稿
-    if [ -f "$PROJECT_ROOT/specs/$feature_name/spec-review.md" ]; then
+    if [ -f "$WORKFLOW_DATA_DIR/$feature_name/spec-review.md" ]; then
       echo "  [Stage 3] Claude 复审（澄清后）..." >&2
       local stage3_model
       stage3_model=$(select_model "$complexity")
       opencli claude --print --permission-mode bypassPermissions --model "$stage3_model" -p "
         Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
-        Read $PROJECT_ROOT/specs/$feature_name/spec-review.md
-        Read $PROJECT_ROOT/specs/$feature_name/requirements.md
-        Read $PROJECT_ROOT/specs/$feature_name/design.md
-        Read $PROJECT_ROOT/specs/$feature_name/tasks.md
+        Read $WORKFLOW_DATA_DIR/$feature_name/spec-review.md
+        Read $WORKFLOW_DATA_DIR/$feature_name/requirements.md
+        Read $WORKFLOW_DATA_DIR/$feature_name/design.md
+        Read $WORKFLOW_DATA_DIR/$feature_name/tasks.md
         Execute spec-writer Stage 3: 复审定稿，PASS 项不改，ISSUE 项按建议修改，更新文件状态为 reviewed。
       " >&2
 
       # CRITICAL >= 3 阻断检查（与主路径一致）
       local critical_count
       critical_count=$(sed -n 's/.*CRITICAL_ISSUES:[[:space:]]*\([0-9]*\).*/\1/p' \
-        "$PROJECT_ROOT/specs/$feature_name/spec-review.md" 2>/dev/null | tail -1)
+        "$WORKFLOW_DATA_DIR/$feature_name/spec-review.md" 2>/dev/null | tail -1)
       critical_count="${critical_count:-0}"
       if is_numeric "$critical_count" && [ "$critical_count" -ge 3 ]; then
-        local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+        local spec_dir="$WORKFLOW_DATA_DIR/$feature_name"
         save_spec_review_state "$feature_name" "$critical_count"
         jq -n \
           --arg feature "$feature_name" \
@@ -134,7 +134,7 @@ cmd_answer_clarification() {
           '{feature:$feature,status:"paused",paused_at:$ts,paused_step:$ps,last_done_step:$ls,reason:"spec-review-critical",requirements_snapshot:"requirements.md.snapshot"}' \
           > "$spec_dir/paused.json"
         [ -f "$spec_dir/requirements.md" ] && cp "$spec_dir/requirements.md" "$spec_dir/requirements.md.snapshot"
-        log "PIPELINE_PAUSED_BY_SPEC_REVIEW: $feature_name ($critical_count CRITICAL_ISSUES, post-clarification)" "$PROJECT_ROOT/specs/.workflow-log"
+        log "PIPELINE_PAUSED_BY_SPEC_REVIEW: $feature_name ($critical_count CRITICAL_ISSUES, post-clarification)" "$WORKFLOW_DATA_DIR/.workflow-log"
         local critical_summary
         critical_summary=$(grep -i "CRITICAL\|ISSUE" "$spec_dir/spec-review.md" 2>/dev/null | head -20)
         agent_notify \

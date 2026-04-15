@@ -1,7 +1,7 @@
 #!/bin/bash
 # state.sh — 统一状态机引擎
 #
-# 所有 feature 的运行状态统一到 specs/{feature}/state.json，替代散落的：
+# 所有 feature 的运行状态统一到 $WORKFLOW_DATA_DIR/{feature}/state.json，替代散落的：
 #   paused.json, awaiting-clarification.json, awaiting-spec-review.json, workflow-log grep
 #
 # 状态枚举:
@@ -69,7 +69,7 @@ _state_transition_lookup() {
 # 获取 state.json 路径
 _state_file() {
   local feature="$1"
-  echo "$PROJECT_ROOT/specs/$feature/state.json"
+  echo "$WORKFLOW_DATA_DIR/$feature/state.json"
 }
 
 # 读取当前状态（返回 status 字段，无文件返回 idle）

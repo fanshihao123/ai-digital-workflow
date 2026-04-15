@@ -15,9 +15,9 @@ description: >
 ### Step 1：分析本次变更
 
 读取当前功能的全部产物：
-- `specs/{feature-name}/requirements.md` — 做了什么
-- `specs/{feature-name}/design.md` — 怎么设计的
-- `specs/{feature-name}/tasks.md` — 改了哪些文件
+- `$WORKFLOW_DATA_DIR/{feature-name}/requirements.md` — 做了什么
+- `$WORKFLOW_DATA_DIR/{feature-name}/design.md` — 怎么设计的
+- `$WORKFLOW_DATA_DIR/{feature-name}/tasks.md` — 改了哪些文件
 - `git log --oneline` — 实际代码变更
 
 ### Step 2：更新项目文档
@@ -41,17 +41,17 @@ description: >
 
 ```bash
 DATE=$(date +%Y-%m-%d)
-ARCHIVE="specs/archive/${DATE}-{需求名称}"
+ARCHIVE="$WORKFLOW_DATA_DIR/archive/${DATE}-{需求名称}"
 mkdir -p "$ARCHIVE"
-cp specs/{feature-name}/requirements.md "$ARCHIVE/"
-cp specs/{feature-name}/design.md "$ARCHIVE/"
-cp specs/{feature-name}/tasks.md "$ARCHIVE/"
-cp specs/{feature-name}/test-report.md "$ARCHIVE/" 2>/dev/null || true
+cp $WORKFLOW_DATA_DIR/{feature-name}/requirements.md "$ARCHIVE/"
+cp $WORKFLOW_DATA_DIR/{feature-name}/design.md "$ARCHIVE/"
+cp $WORKFLOW_DATA_DIR/{feature-name}/tasks.md "$ARCHIVE/"
+cp $WORKFLOW_DATA_DIR/{feature-name}/test-report.md "$ARCHIVE/" 2>/dev/null || true
 ```
 
 ### Step 4：更新迭代记录
 
-追加到 `specs/ITERATIONS.md`：
+追加到 `$WORKFLOW_DATA_DIR/ITERATIONS.md`：
 
 ```markdown
 | {日期} | {需求名称} | {任务数} | {覆盖率} | 完成 |
@@ -60,6 +60,6 @@ cp specs/{feature-name}/test-report.md "$ARCHIVE/" 2>/dev/null || true
 ### Step 5：提交
 
 ```bash
-git add README.md .claude/ specs/archive/ specs/ITERATIONS.md
-git commit -m "docs({需求名称}): 同步文档 + 归档迭代"
+git add README.md .claude/
+git commit -m "docs({需求名称}): 同步文档"
 ```

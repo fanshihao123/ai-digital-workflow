@@ -100,7 +100,7 @@ for pattern in "${SECURITY_CODE_PATTERNS[@]}"; do
 done
 
 # 检查审查报告中的 SEC 发现
-REVIEW_REPORT="$PROJECT_ROOT/specs/${FEATURE_NAME}/review-report.md"
+REVIEW_REPORT="$WORKFLOW_DATA_DIR/${FEATURE_NAME}/review-report.md"
 if [ -f "$REVIEW_REPORT" ]; then
   SEC_COUNT=$(grep -c "SEC-" "$REVIEW_REPORT" 2>/dev/null || echo 0)
   if [ "$SEC_COUNT" -gt 0 ]; then
@@ -110,7 +110,7 @@ if [ -f "$REVIEW_REPORT" ]; then
 fi
 
 # 检查 design.md 安全章节
-DESIGN_FILE="$PROJECT_ROOT/specs/${FEATURE_NAME}/design.md"
+DESIGN_FILE="$WORKFLOW_DATA_DIR/${FEATURE_NAME}/design.md"
 if [ -f "$DESIGN_FILE" ] && grep -qiE "安全考虑|Security Considerations" "$DESIGN_FILE"; then
   CONTENT=$(sed -n '/安全考虑\|Security Considerations/,/^##/p' "$DESIGN_FILE" | grep -v '^##' | grep -v '^$' | head -3)
   if [ -n "$CONTENT" ]; then

@@ -18,6 +18,13 @@ source "$SCRIPT_DIR/../lib/common.sh"
 load_env "$PROJECT_ROOT"
 validate_config || echo "⚠️ 部分配置无效，请检查 .env" >&2
 
+# ── 工作流数据目录（specs/状态/日志等产物，不污染项目仓库） ──
+if [ -z "${WORKFLOW_DATA_DIR:-}" ]; then
+  _project_name=$(basename "$PROJECT_ROOT")
+  WORKFLOW_DATA_DIR="$HOME/.ai-workflow/data/$_project_name"
+fi
+export WORKFLOW_DATA_DIR
+
 # ── 加载 v4 模块 ──
 # lib（工具函数）
 source "$SCRIPT_DIR/lib/state.sh"
@@ -76,9 +83,9 @@ cleanup() {
     [ -n "$feature" ] && error_msg="需求 '$feature' 的${error_msg}，可执行 /resume $feature 从断点继续。"
 
     # 写日志（即使模块未加载也尝试）
-    if [ -d "$PROJECT_ROOT/specs" ]; then
+    if [ -d "$WORKFLOW_DATA_DIR" ]; then
       echo "[$(date '+%H:%M:%S')] PIPELINE_FAILED: ${feature:-unknown} (exit code: $exit_code)" \
-        >> "$PROJECT_ROOT/specs/.workflow-log" 2>/dev/null || true
+        >> "$WORKFLOW_DATA_DIR/.workflow-log" 2>/dev/null || true
     fi
 
     # 记录 pipeline 状态
@@ -121,8 +128,8 @@ trap cleanup EXIT ERR
 MESSAGE="${1:-$(cat -)}"
 TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
 
-mkdir -p "$PROJECT_ROOT/specs"
-echo "[$TIMESTAMP] Received: $MESSAGE" >> "$PROJECT_ROOT/specs/.workflow-log"
+mkdir -p "$WORKFLOW_DATA_DIR"
+echo "[$TIMESTAMP] Received: $MESSAGE" >> "$WORKFLOW_DATA_DIR/.workflow-log"
 
 MSG_TYPE=$(echo "$MESSAGE" | jq -r '.msg_type // "text"' 2>/dev/null || echo "text")
 MSG_TEXT=$(echo "$MESSAGE" | jq -r '.content.text // .content // empty' 2>/dev/null || echo "$MESSAGE")

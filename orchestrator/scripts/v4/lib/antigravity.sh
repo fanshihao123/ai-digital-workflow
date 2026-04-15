@@ -658,7 +658,7 @@ EOF
 # 输出：每行一个相对路径
 _read_ui_artifacts() {
   local feature_name="$1"
-  local artifact_file="$PROJECT_ROOT/specs/$feature_name/.ui-restore-artifacts.json"
+  local artifact_file="$WORKFLOW_DATA_DIR/$feature_name/.ui-restore-artifacts.json"
   [ -f "$artifact_file" ] || return 0
   jq -r '.tasks[].files[]' "$artifact_file" 2>/dev/null | sort -u
 }
@@ -667,7 +667,7 @@ _read_ui_artifacts() {
 _task_has_artifacts() {
   local feature_name="$1"
   local task_num="$2"
-  local artifact_file="$PROJECT_ROOT/specs/$feature_name/.ui-restore-artifacts.json"
+  local artifact_file="$WORKFLOW_DATA_DIR/$feature_name/.ui-restore-artifacts.json"
   [ -f "$artifact_file" ] && jq -e ".tasks[\"$task_num\"]" "$artifact_file" >/dev/null 2>&1
 }
 
@@ -678,8 +678,8 @@ step2a_restore_task() {
   local feature_name="$1"
   local task_num="$2"
   local base_url="$3"
-  local tasks_file="$PROJECT_ROOT/specs/$feature_name/tasks.md"
-  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  local tasks_file="$WORKFLOW_DATA_DIR/$feature_name/tasks.md"
+  local spec_dir="$WORKFLOW_DATA_DIR/$feature_name"
   local artifact_file="$spec_dir/.ui-restore-artifacts.json"
   local log_file="$spec_dir/ui-restore-log.json"
 

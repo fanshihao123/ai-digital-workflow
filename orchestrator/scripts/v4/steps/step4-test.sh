@@ -4,7 +4,7 @@
 
 step4_test() {
   local feature_name="$1"
-  local test_report="$PROJECT_ROOT/specs/$feature_name/test-report.md"
+  local test_report="$WORKFLOW_DATA_DIR/$feature_name/test-report.md"
   local feature_status
   local repo_debt_status
   local workflow_verdict
@@ -36,7 +36,7 @@ step4_test() {
 
   if [ "$workflow_verdict" = "FAIL" ]; then
     echo "  ⚠️ 测试未通过"
-    notify "❌ 测试失败: $feature_name\n查看 specs/$feature_name/test-report.md"
+    notify "❌ 测试失败: $feature_name\n查看 $WORKFLOW_DATA_DIR/$feature_name/test-report.md"
     return 1
   fi
 
@@ -51,7 +51,7 @@ step4_test() {
 
 step4_fix_and_retry() {
   local feature_name="$1"
-  local test_report="$PROJECT_ROOT/specs/$feature_name/test-report.md"
+  local test_report="$WORKFLOW_DATA_DIR/$feature_name/test-report.md"
   local workflow_verdict
 
   echo "=== Step 4.5: 测试失败自动修复 ==="
@@ -77,8 +77,8 @@ step4_fix_and_retry() {
     - $PROJECT_ROOT/.claude/skills/test-runner/SKILL.md（如存在）
     - $PROJECT_ROOT/.claude/CODING_GUIDELINES.md（如存在）
     - $PROJECT_ROOT/.claude/ARCHITECTURE.md（如存在）
-    - $PROJECT_ROOT/specs/$feature_name/test-report.md
-    - $PROJECT_ROOT/specs/$feature_name/tasks.md
+    - $WORKFLOW_DATA_DIR/$feature_name/test-report.md
+    - $WORKFLOW_DATA_DIR/$feature_name/tasks.md
 
     执行单次测试修复回路：
     1. 分析 test-report.md 中的失败测试

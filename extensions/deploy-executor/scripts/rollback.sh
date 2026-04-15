@@ -6,7 +6,7 @@ set -euo pipefail
 
 FEATURE_NAME="${1:?用法: rollback.sh <需求名称> [target-commit]}"
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-SPECS_DIR="$PROJECT_ROOT/specs/${FEATURE_NAME}"
+SPECS_DIR="$WORKFLOW_DATA_DIR/${FEATURE_NAME}"
 DEPLOY_MANIFEST="$SPECS_DIR/deploy-manifest.json"
 LOG_FILE="$SPECS_DIR/.workflow-log"
 

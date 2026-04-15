@@ -20,7 +20,7 @@ if [ -z "${FEISHU_WEBHOOK_URL:-}" ]; then
 fi
 
 # Detect active feature
-ACTIVE_FEATURE=$(ls -t "$PROJECT_ROOT"/specs/*/tasks.md 2>/dev/null | head -1 | sed "s|$PROJECT_ROOT/specs/||;s|/tasks.md||" || echo "unknown")
+ACTIVE_FEATURE=$(ls -t "$WORKFLOW_DATA_DIR"/*/tasks.md 2>/dev/null | head -1 | sed "s|$WORKFLOW_DATA_DIR/||;s|/tasks.md||" || echo "unknown")
 
 # 使用 common.sh 中的安全通知函数
 feishu_notify "$NOTIFICATION" "$ACTIVE_FEATURE"

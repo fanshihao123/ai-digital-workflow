@@ -26,7 +26,7 @@
 │              │                  │                   │             │
 │              ▼                  ▼                   ▼             │
 │         写入文件系统         stdout 重定向         修改项目代码      │
-│         (specs/*.md)        到文件 (>)           (浏览器内编辑)     │
+│     ($WORKFLOW_DATA_DIR/)   到文件 (>)           (浏览器内编辑)     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -48,7 +48,7 @@
 │ 输入方式      │ prompt 里嵌入文件内容    │ prompt 里嵌入     │ prompt 消息   │
 │              │ 或指示它 Read 文件       │ 文件内容 $(cat)  │              │
 ├──────────────┼────────────────────────┼─────────────────┼──────────────┤
-│ 输出方式      │ 直接写文件到 specs/     │ stdout 重定向     │ 修改项目源码   │
+│ 输出方式      │ 直接写文件到 $WORKFLOW_DATA_DIR/     │ stdout 重定向     │ 修改项目源码   │
 │              │ (有文件系统权限)         │ > spec-review.md │ (浏览器内)    │
 ├──────────────┼────────────────────────┼─────────────────┼──────────────┤
 │ 执行权限      │ bypassPermissions      │ --full-auto      │ 浏览器沙箱内   │
@@ -72,9 +72,9 @@ Shell 脚本 (编排者)
      │
      ▼
 ┌─────────────┐    写入文件
-│  Claude Code │──────────────→  specs/feature/requirements.md
-│  (Stage 1)   │──────────────→  specs/feature/design.md
-│              │──────────────→  specs/feature/tasks.md
+│  Claude Code │──────────────→  $WORKFLOW_DATA_DIR/feature/requirements.md
+│  (Stage 1)   │──────────────→  $WORKFLOW_DATA_DIR/feature/design.md
+│              │──────────────→  $WORKFLOW_DATA_DIR/feature/tasks.md
 └─────────────┘
      │
      │ Shell 用 $(cat) 读取三个文件内容
@@ -83,7 +83,7 @@ Shell 脚本 (编排者)
      │
      ▼
 ┌─────────────┐    stdout 重定向
-│  Codex       │──────────────→  specs/feature/spec-review.md
+│  Codex       │──────────────→  $WORKFLOW_DATA_DIR/feature/spec-review.md
 │  (Stage 2)   │                 (DIMENSION/VERDICT/CRITICAL_ISSUES)
 └─────────────┘
      │
@@ -93,9 +93,9 @@ Shell 脚本 (编排者)
      │
      ▼
 ┌─────────────┐    覆写文件
-│  Claude Code │──────────────→  specs/feature/requirements.md (updated)
-│  (Stage 3)   │──────────────→  specs/feature/design.md (updated)
-│              │──────────────→  specs/feature/tasks.md (updated)
+│  Claude Code │──────────────→  $WORKFLOW_DATA_DIR/feature/requirements.md (updated)
+│  (Stage 3)   │──────────────→  $WORKFLOW_DATA_DIR/feature/design.md (updated)
+│              │──────────────→  $WORKFLOW_DATA_DIR/feature/tasks.md (updated)
 └─────────────┘
      │
      │ Shell 读 spec-review.md 里的 CRITICAL_ISSUES 数字
@@ -107,22 +107,22 @@ Shell 脚本 (编排者)
 ```bash
 # Stage 1: Claude 写文件
 opencli claude --print -p "生成 requirements/design/tasks..."
-# → Claude 直接写 specs/feature/*.md
+# → Claude 直接写 $WORKFLOW_DATA_DIR/feature/*.md
 
 # Stage 2: Codex 审查（文件内容嵌入 prompt）
 codex exec --full-auto "
   requirements.md:
-  $(cat specs/feature/requirements.md)    ← Shell 把文件读出来塞进 prompt
+  $(cat $WORKFLOW_DATA_DIR/feature/requirements.md)    ← Shell 把文件读出来塞进 prompt
   design.md:
-  $(cat specs/feature/design.md)
+  $(cat $WORKFLOW_DATA_DIR/feature/design.md)
   tasks.md:
-  $(cat specs/feature/tasks.md)
-  请审查..." > specs/feature/spec-review.md   ← stdout 写入文件
+  $(cat $WORKFLOW_DATA_DIR/feature/tasks.md)
+  请审查..." > $WORKFLOW_DATA_DIR/feature/spec-review.md   ← stdout 写入文件
 
 # Stage 3: Claude 读 Codex 的审查结果，修改文档
 opencli claude --print -p "
-  Read specs/feature/spec-review.md       ← 告诉 Claude 去读这个文件
-  Read specs/feature/requirements.md
+  Read $WORKFLOW_DATA_DIR/feature/spec-review.md       ← 告诉 Claude 去读这个文件
+  Read $WORKFLOW_DATA_DIR/feature/requirements.md
   按审查意见修改..."
 # → Claude 自己读文件、自己改文件
 ```
@@ -205,7 +205,7 @@ fi
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          文件系统 (中间层)                            │
 │                                                                      │
-│  specs/{feature}/                                                    │
+│  $WORKFLOW_DATA_DIR/{feature}/                                                    │
 │  ├── requirements.md  ←── Claude 写 ──→ Codex 读(via prompt嵌入)     │
 │  ├── design.md        ←── Claude 写 ──→ Codex 读(via prompt嵌入)     │
 │  ├── tasks.md         ←── Claude 写 ──→ Codex 读(via prompt嵌入)     │
@@ -253,7 +253,7 @@ fi
 | 通信路径 | 方式 | 举例 |
 |---------|------|------|
 | Shell → Claude | CLI 调用 + prompt | `opencli claude -p "Read xxx, 执行 yyy"` |
-| Claude → Shell | 写文件到 specs/ | Claude 直接写 `requirements.md` |
+| Claude → Shell | 写文件到 $WORKFLOW_DATA_DIR/ | Claude 直接写 `requirements.md` |
 | Shell → Codex | CLI 调用 + prompt 嵌入文件内容 | `codex exec "$(cat file)" > output.md` |
 | Codex → Shell | stdout 重定向到文件 | `> spec-review.md` |
 | Shell → Antigravity | CLI 发消息 | `opencli antigravity send "prompt"` |

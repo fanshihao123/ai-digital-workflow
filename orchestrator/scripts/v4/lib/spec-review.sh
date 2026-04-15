@@ -6,7 +6,7 @@
 save_spec_review_state() {
   local feature_name="$1"
   local critical_count="$2"
-  local state_file="$PROJECT_ROOT/specs/$feature_name/awaiting-spec-review.json"
+  local state_file="$WORKFLOW_DATA_DIR/$feature_name/awaiting-spec-review.json"
   jq -n \
     --arg feature "$feature_name" \
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -18,12 +18,12 @@ save_spec_review_state() {
 # 检查是否有待处理的 spec 审查阻断
 has_pending_spec_review() {
   local feature_name="$1"
-  local state_file="$PROJECT_ROOT/specs/$feature_name/awaiting-spec-review.json"
+  local state_file="$WORKFLOW_DATA_DIR/$feature_name/awaiting-spec-review.json"
   [ -f "$state_file" ] && jq -e '.status == "awaiting"' "$state_file" >/dev/null 2>&1
 }
 
 # 清理 spec 审查阻断状态
 clear_spec_review_state() {
   local feature_name="$1"
-  rm -f "$PROJECT_ROOT/specs/$feature_name/awaiting-spec-review.json"
+  rm -f "$WORKFLOW_DATA_DIR/$feature_name/awaiting-spec-review.json"
 }

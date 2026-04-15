@@ -29,8 +29,8 @@ cmd_fix_spec() {
     return 1
   fi
 
-  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
-  local pipeline_log="$PROJECT_ROOT/specs/.workflow-log"
+  local spec_dir="$WORKFLOW_DATA_DIR/$feature_name"
+  local pipeline_log="$WORKFLOW_DATA_DIR/.workflow-log"
 
   # 立即标记为处理中，防止并发 /fix-spec 重入
   local state_file="$spec_dir/awaiting-spec-review.json"

@@ -3,7 +3,7 @@ name: spec-writer
 description: >
   需求→设计→任务一站式生成。接收 URL 或文字描述，通过 Chrome MCP 抓取页面内容
   或直接解析文字，结合 .claude/ 项目规范和公司 skills 知识库，一次性输出
-  requirements.md + design.md + tasks.md 三个文件到 specs/{feature-name}/ 目录。
+  requirements.md + design.md + tasks.md 三个文件到 $WORKFLOW_DATA_DIR/{feature-name}/ 目录。
   触发条件：/start-workflow、/workflow、新需求、Jira URL、飞书消息、
   "写 spec"、"生成设计"、"分解任务"。
 ---
@@ -80,8 +80,8 @@ description: >
 
 ## 输出：两阶段生成（避免澄清前浪费 token）
 
-所有输出保存到 `specs/{feature-name}/` 目录。
-需求名称使用英文 kebab-case，如 `specs/user-login-oauth/`。
+所有输出保存到 `$WORKFLOW_DATA_DIR/{feature-name}/` 目录。
+需求名称使用英文 kebab-case，如 `user-login-oauth/`。
 
 > **分阶段调用说明**
 > - **Stage 1a**：仅生成 `requirements.md`。编排器检测开放问题，若有 `[UNCERTAIN]` 则暂停询问用户，答复后重新执行 Stage 1a。
@@ -128,7 +128,7 @@ description: >
 ```markdown
 # 设计：{需求名称}
 
-> 需求：specs/{feature-name}/requirements.md
+> 需求：$WORKFLOW_DATA_DIR/{feature-name}/requirements.md
 > 复杂度：low | medium | high
 > 预估：{N 个任务}
 
@@ -157,7 +157,7 @@ description: >
 ```markdown
 # 任务：{需求名称}
 
-> 设计：specs/{feature-name}/design.md
+> 设计：$WORKFLOW_DATA_DIR/{feature-name}/design.md
 > 总任务数：{N}
 > 状态：pending
 
@@ -235,7 +235,7 @@ Stage 3: Claude 复审 + 定稿
 ### Stage 1：Claude 生成初稿
 
 Claude 按照上面的模板，一次性生成三个文件的 v1 版本。
-保存到 `specs/{feature-name}/` 目录，文件头部标记：
+保存到 `$WORKFLOW_DATA_DIR/{feature-name}/` 目录，文件头部标记：
 
 ```markdown
 > 状态：draft-v1
@@ -252,13 +252,13 @@ codex exec --full-auto "
 你是一个资深技术架构师，负责审查以下 spec 文档的质量。
 
 requirements.md:
-$(cat specs/{feature-name}/requirements.md)
+$(cat $WORKFLOW_DATA_DIR/{feature-name}/requirements.md)
 
 design.md:
-$(cat specs/{feature-name}/design.md)
+$(cat $WORKFLOW_DATA_DIR/{feature-name}/design.md)
 
 tasks.md:
-$(cat specs/{feature-name}/tasks.md)
+$(cat $WORKFLOW_DATA_DIR/{feature-name}/tasks.md)
 
 项目架构参考:
 $(cat .claude/ARCHITECTURE.md)
@@ -297,7 +297,7 @@ SUMMARY: {一句话总结}
 "
 ```
 
-将审查结果保存到 `specs/{feature-name}/spec-review.md`：
+将审查结果保存到 `$WORKFLOW_DATA_DIR/{feature-name}/spec-review.md`：
 
 ```markdown
 # Spec 审查报告
@@ -331,7 +331,7 @@ SUMMARY: {一句话总结}
 Claude 读取 Codex 的审查报告，执行最终修订：
 
 ```
-读取 specs/{feature-name}/spec-review.md
+读取 $WORKFLOW_DATA_DIR/{feature-name}/spec-review.md
 
 if OVERALL == "PASS" 且 CRITICAL_ISSUES == 0:
     → 将三个文件状态更新为 reviewed

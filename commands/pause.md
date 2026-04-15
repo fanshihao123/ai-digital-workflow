@@ -36,7 +36,7 @@ model: sonnet
 ```
 
 暂停后：
-- 如需改需求：编辑 `specs/{feature}/requirements.md`，然后 `/restart {feature}`
+- 如需改需求：编辑 `$WORKFLOW_DATA_DIR/{feature}/requirements.md`，然后 `/restart {feature}`
 - 不改需求：直接 `/restart {feature}`
 
 ---

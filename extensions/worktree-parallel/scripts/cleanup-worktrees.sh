@@ -17,7 +17,7 @@ for arg in "$@"; do
 done
 
 PROJECT_ROOT=$(git rev-parse --show-toplevel)
-LOG_FILE="$PROJECT_ROOT/specs/${FEATURE_NAME}/.workflow-log"
+LOG_FILE="$WORKFLOW_DATA_DIR/${FEATURE_NAME}/.workflow-log"
 CLEANED=0
 SKIPPED=0
 

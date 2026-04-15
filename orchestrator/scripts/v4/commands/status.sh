@@ -12,7 +12,7 @@ cmd_status() {
   echo ""
 
   echo "=== Active Specs ==="
-  for spec_dir in "$PROJECT_ROOT"/specs/*/; do
+  for spec_dir in "$WORKFLOW_DATA_DIR"/*/; do
     [ -d "$spec_dir" ] || continue
     local fname
     fname=$(basename "$spec_dir")

@@ -134,7 +134,7 @@ C. 如配置了 COMPANY_SKILLS_GIT → git pull 公司 skills 仓库
               Stage 1: Claude 生成初稿 (v1)
                           |
             ┌─────────────┼─────────────┐
-     requirements.md   design.md    tasks.md     → specs/{feature-name}/
+     requirements.md   design.md    tasks.md     → $WORKFLOW_DATA_DIR/{feature-name}/
             └─────────────┼─────────────┘
                           |
               Stage 2: OpenAI Codex / GPT-5.4 审查
@@ -249,8 +249,8 @@ FAIL   再看全仓结果是回归还是历史债
 
 ```
 更新 .claude/ 规范文件 + README
-归档 → specs/archive/{date}-{需求名称}/
-更新 → specs/ITERATIONS.md
+归档 → $WORKFLOW_DATA_DIR/archive/{date}-{需求名称}/
+更新 → $WORKFLOW_DATA_DIR/ITERATIONS.md
 ```
 
 ### Step 6：部署（扩展 — 按需）
@@ -325,7 +325,7 @@ jira-sync（如启用）→ sync-jira.sh {key} deployed
 ├── ARCHITECTURE.md
 ├── SECURITY.md
 └── CODING_GUIDELINES.md
-specs/
-├── {需求名称}/                ← 当前功能的 spec 文件
-└── archive/                   ← 已完成迭代的归档
+~/.ai-workflow/data/{项目名}/        ← WORKFLOW_DATA_DIR（项目外，不污染仓库）
+├── {需求名称}/                      ← 当前功能的 spec 文件
+└── archive/                         ← 已完成迭代的归档
 ```

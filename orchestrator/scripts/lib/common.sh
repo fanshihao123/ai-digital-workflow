@@ -287,7 +287,7 @@ _pipeline_state_file() {
   local feature="$1"
   local root
   root=$(get_project_root)
-  echo "$root/specs/$feature/.pipeline-state"
+  echo "${WORKFLOW_DATA_DIR:-$root/specs}/$feature/.pipeline-state"
 }
 
 pipeline_state_set() {

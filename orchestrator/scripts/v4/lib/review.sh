@@ -4,7 +4,7 @@
 
 run_local_review() {
   local feature_name="$1"
-  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  local spec_dir="$WORKFLOW_DATA_DIR/$feature_name"
   local review_report="$spec_dir/review-report.md"
   local default_branch
   default_branch=$(get_default_branch "$PROJECT_ROOT")

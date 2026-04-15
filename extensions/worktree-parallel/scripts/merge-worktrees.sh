@@ -8,7 +8,7 @@ FEATURE_NAME="${1:?}"
 AGENT_IDS="${2:?}"
 ASSIGNMENT_FILE="${3:?}"
 PROJECT_ROOT=$(git rev-parse --show-toplevel)
-LOG_FILE="$PROJECT_ROOT/specs/${FEATURE_NAME}/.workflow-log"
+LOG_FILE="$WORKFLOW_DATA_DIR/${FEATURE_NAME}/.workflow-log"
 
 # 验证输入
 if [ -z "$AGENT_IDS" ]; then

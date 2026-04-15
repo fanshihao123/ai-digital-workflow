@@ -10,7 +10,7 @@ model: sonnet
 ## 作用
 
 从上次中断的地方继续执行工作流，跳过已完成的步骤，不重头来过。
-通过读取 `specs/.workflow-log` 判断最后完成的 Step，从下一步继续。
+通过读取 `$WORKFLOW_DATA_DIR/.workflow-log` 判断最后完成的 Step，从下一步继续。
 
 ## 适用场景
 

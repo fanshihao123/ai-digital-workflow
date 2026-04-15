@@ -4,7 +4,7 @@
 
 step3_review() {
   local feature_name="$1"
-  local review_report="$PROJECT_ROOT/specs/$feature_name/review-report.md"
+  local review_report="$WORKFLOW_DATA_DIR/$feature_name/review-report.md"
 
   ensure_not_paused "$feature_name" "step3_review" || return 0
 

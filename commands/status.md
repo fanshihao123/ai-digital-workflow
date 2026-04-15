@@ -10,4 +10,4 @@ model: haiku
 
 !`bash .claude/orchestrator/scripts/feishu-handler.sh "/status"`
 
-如果脚本输出不足，再读取 `specs/` 和相关日志补充总结。
+如果脚本输出不足，再读取 `$WORKFLOW_DATA_DIR/` 和相关日志补充总结。

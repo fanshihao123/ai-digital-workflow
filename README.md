@@ -115,7 +115,7 @@ Step 7: 完成汇总通知
    审查: PASS | 覆盖率: 85%
 ```
 
-同时 `specs/{feature}/progress.md` 保存完整进度表格，`/status` 随时查看。
+同时 `$WORKFLOW_DATA_DIR/{feature}/progress.md` 保存完整进度表格，`/status` 随时查看。
 
 ## v4 模块化架构（默认）
 
@@ -171,17 +171,17 @@ orchestrator/scripts/
 ├── SECURITY.md                 ← 安全规范
 ├── CODING_GUIDELINES.md        ← 编码规范
 └── hooks.json                  ← Claude Code hooks
-specs/
-├── {需求名称}/                  ← 当前需求的 spec 文件
+~/.ai-workflow/data/{项目名}/     ← WORKFLOW_DATA_DIR（项目外，不污染仓库）
+├── {需求名称}/                    ← 当前需求的 spec 文件
 │   ├── requirements.md
 │   ├── design.md
 │   ├── tasks.md
-│   ├── state.json                ← v4 统一状态机
-│   ├── progress.md               ← 流水线进度表格
-│   ├── progress.json             ← 进度机器可读数据
-│   ├── review-report.md          ← 代码审查报告
-│   └── test-report.md            ← 测试报告
-└── archive/                    ← 已完成迭代的归档
+│   ├── state.json                  ← 统一状态机
+│   ├── progress.md                 ← 流水线进度表格
+│   ├── progress.json               ← 进度机器可读数据
+│   ├── review-report.md            ← 代码审查报告
+│   └── test-report.md              ← 测试报告
+└── archive/                      ← 已完成迭代的归档
 ```
 
 ## 扩展开关

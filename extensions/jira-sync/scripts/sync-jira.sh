@@ -70,7 +70,7 @@ echo "🔄 Jira 同步: $ISSUE_KEY ($PHASE)"
 case "$PHASE" in
   requirements-done)
     jira_transition "$ISSUE_KEY" "In Analysis"
-    jira_comment "$ISSUE_KEY" "[AI Workflow] Phase 1 完成：需求已解析 → specs/${FEATURE_NAME}/requirements.md"
+    jira_comment "$ISSUE_KEY" "[AI Workflow] Phase 1 完成：需求已解析 → $WORKFLOW_DATA_DIR/${FEATURE_NAME}/requirements.md"
     ;;
   design-done)
     jira_transition "$ISSUE_KEY" "In Design"

@@ -61,7 +61,7 @@ step1_spec_writer() {
   fi
 
   # 严格校验 Stage 1a 产物：requirements.md 必须存在且非空
-  local req_file="$PROJECT_ROOT/specs/$feature_name/requirements.md"
+  local req_file="$WORKFLOW_DATA_DIR/$feature_name/requirements.md"
   if [ ! -s "$req_file" ]; then
     echo "  ❌ Stage 1a 产物校验失败: requirements.md 不存在或为空 ($req_file)" >&2
     notify "❌ spec-writer 失败: requirements.md 未生成 ($feature_name)"
@@ -81,7 +81,7 @@ step1_spec_writer() {
       echo "  [clarification] 检测到 $oq_count 个开放问题，暂停工作流" >&2
       save_clarification_state "$feature_name" "$input" "$open_questions_text"
       notify_open_questions "$feature_name" "$open_questions_text"
-      log "STEP_1_PAUSED: $feature_name ($oq_count 开放问题)" "$PROJECT_ROOT/specs/.workflow-log"
+      log "STEP_1_PAUSED: $feature_name ($oq_count 开放问题)" "$WORKFLOW_DATA_DIR/.workflow-log"
       echo "  ⏸️ 等待用户答复: $feature_name" >&2
       echo "__PAUSED__"
       return 0
@@ -96,7 +96,7 @@ step1_spec_writer() {
   # ── Figma MCP 可用性实测（避免 Claude 把已可用的 Figma 错误升级为 [UNCERTAIN]）──
   local figma_hint=""
   local figma_urls
-  figma_urls=$(grep -oE 'https://[^ ]*figma\.com/[^ )]*' "$PROJECT_ROOT/specs/$feature_name/requirements.md" 2>/dev/null || true)
+  figma_urls=$(grep -oE 'https://[^ ]*figma\.com/[^ )]*' "$WORKFLOW_DATA_DIR/$feature_name/requirements.md" 2>/dev/null || true)
 
   if [ -n "$figma_urls" ] && [ "${ENABLE_UI_RESTORER:-false}" = "true" ]; then
     # 有 Figma URL + UI restorer 已启用 → 实测 Antigravity 连接
@@ -120,15 +120,15 @@ step1_spec_writer() {
     Read $PROJECT_ROOT/.claude/SECURITY.md
     Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
     $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
-    Read $PROJECT_ROOT/specs/$feature_name/requirements.md
+    Read $WORKFLOW_DATA_DIR/$feature_name/requirements.md
     ${figma_hint:+$figma_hint}
     Execute spec-writer Stage 1b: generate design.md + tasks.md based on the confirmed requirements.md above.
     $([ "$is_hotfix" = "true" ] && echo "This is a /hotfix — generate tasks.md directly with minimal design")
   " >&2
 
   # 严格校验 Stage 1b 产物：design.md 和 tasks.md 必须存在且非空
-  local design_file="$PROJECT_ROOT/specs/$feature_name/design.md"
-  local tasks_file="$PROJECT_ROOT/specs/$feature_name/tasks.md"
+  local design_file="$WORKFLOW_DATA_DIR/$feature_name/design.md"
+  local tasks_file="$WORKFLOW_DATA_DIR/$feature_name/tasks.md"
   if [ ! -s "$design_file" ] || [ ! -s "$tasks_file" ]; then
     echo "  ❌ Stage 1b 产物校验失败:" >&2
     [ ! -s "$design_file" ] && echo "    - design.md 不存在或为空" >&2
@@ -143,7 +143,7 @@ step1_spec_writer() {
 
   # 跳过审查条件：hotfix 或 (任务数 <= 2 且 complexity: low)
   local task_count
-  task_count=$(grep -c "^### Task" "$PROJECT_ROOT/specs/$feature_name/tasks.md" 2>/dev/null || echo 0)
+  task_count=$(grep -c "^### Task" "$WORKFLOW_DATA_DIR/$feature_name/tasks.md" 2>/dev/null || echo 0)
 
   if [ "$is_hotfix" = "true" ] || { [ "$task_count" -le 2 ] && [ "$complexity" = "low" ]; }; then
     local skip_reason
@@ -162,13 +162,13 @@ step1_spec_writer() {
       你是一个资深技术架构师，负责审查以下 spec 文档的质量。
 
       requirements.md:
-      $(cat "$PROJECT_ROOT/specs/$feature_name/requirements.md")
+      $(cat "$WORKFLOW_DATA_DIR/$feature_name/requirements.md")
 
       design.md:
-      $(cat "$PROJECT_ROOT/specs/$feature_name/design.md")
+      $(cat "$WORKFLOW_DATA_DIR/$feature_name/design.md")
 
       tasks.md:
-      $(cat "$PROJECT_ROOT/specs/$feature_name/tasks.md")
+      $(cat "$WORKFLOW_DATA_DIR/$feature_name/tasks.md")
 
       项目架构参考:
       $(cat "$PROJECT_ROOT/.claude/ARCHITECTURE.md" 2>/dev/null || echo '(无)')
@@ -176,7 +176,7 @@ step1_spec_writer() {
       请从 13 维度审查（R1-R4, D1-D4, T1-T5），对每项给出 PASS / ISSUE 判定。
       输出格式: DIMENSION: Rx  VERDICT: PASS|ISSUE  DETAIL: ...  SUGGESTION: ...
       最后输出: OVERALL: PASS|NEEDS_REVISION  CRITICAL_ISSUES: {数量}
-    " > "$PROJECT_ROOT/specs/$feature_name/spec-review.md" 2>/dev/null || {
+    " > "$WORKFLOW_DATA_DIR/$feature_name/spec-review.md" 2>/dev/null || {
       echo "  ⚠️ Codex 审查失败，跳过 Stage 2" >&2
     }
   else
@@ -188,14 +188,14 @@ step1_spec_writer() {
   # Stage 3: Claude 复审 + 定稿
   feishu_notify "✅ **[Stage 2]** Codex 审查完毕\n⏳ **[Stage 3]** Claude 复审 + 定稿..." "$feature_name"
   echo "  [Stage 3] Claude 复审 + 定稿..." >&2
-  if [ -f "$PROJECT_ROOT/specs/$feature_name/spec-review.md" ]; then
+  if [ -f "$WORKFLOW_DATA_DIR/$feature_name/spec-review.md" ]; then
     model=$(select_model "$complexity")
     opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
       Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
-      Read $PROJECT_ROOT/specs/$feature_name/spec-review.md
-      Read $PROJECT_ROOT/specs/$feature_name/requirements.md
-      Read $PROJECT_ROOT/specs/$feature_name/design.md
-      Read $PROJECT_ROOT/specs/$feature_name/tasks.md
+      Read $WORKFLOW_DATA_DIR/$feature_name/spec-review.md
+      Read $WORKFLOW_DATA_DIR/$feature_name/requirements.md
+      Read $WORKFLOW_DATA_DIR/$feature_name/design.md
+      Read $WORKFLOW_DATA_DIR/$feature_name/tasks.md
 
       Execute spec-writer Stage 3: 根据 Codex 审查报告复审并定稿。
       - PASS 的维度不做修改
@@ -208,12 +208,12 @@ step1_spec_writer() {
     # 审查失败兜底
     local critical_count
     critical_count=$(sed -n 's/.*CRITICAL_ISSUES:[[:space:]]*\([0-9]*\).*/\1/p' \
-      "$PROJECT_ROOT/specs/$feature_name/spec-review.md" 2>/dev/null | tail -1)
+      "$WORKFLOW_DATA_DIR/$feature_name/spec-review.md" 2>/dev/null | tail -1)
     critical_count="${critical_count:-0}"
     if is_numeric "$critical_count" && [ "$critical_count" -ge 3 ]; then
       # 自动保存阻断状态（paused.json + awaiting-spec-review.json）
       save_spec_review_state "$feature_name" "$critical_count"
-      local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+      local spec_dir="$WORKFLOW_DATA_DIR/$feature_name"
       jq -n \
         --arg feature "$feature_name" \
         --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -223,13 +223,13 @@ step1_spec_writer() {
         > "$spec_dir/paused.json"
       # 保存 requirements.md 快照（供 /restart 做 diff 用）
       [ -f "$spec_dir/requirements.md" ] && cp "$spec_dir/requirements.md" "$spec_dir/requirements.md.snapshot"
-      log "PIPELINE_PAUSED_BY_SPEC_REVIEW: $feature_name ($critical_count CRITICAL_ISSUES)" "$PROJECT_ROOT/specs/.workflow-log"
+      log "PIPELINE_PAUSED_BY_SPEC_REVIEW: $feature_name ($critical_count CRITICAL_ISSUES)" "$WORKFLOW_DATA_DIR/.workflow-log"
 
       # 提取 CRITICAL 问题摘要发送给用户
       local critical_summary
       critical_summary=$(grep -i "CRITICAL\|ISSUE" "$spec_dir/spec-review.md" 2>/dev/null | head -20)
       agent_notify \
-        "需求 '$feature_name' 的 Spec 审查发现 $critical_count 个严重问题，流水线已自动暂停。\n\n问题摘要：\n${critical_summary}\n\n详见 specs/$feature_name/spec-review.md" \
+        "需求 '$feature_name' 的 Spec 审查发现 $critical_count 个严重问题，流水线已自动暂停。\n\n问题摘要：\n${critical_summary}\n\n详见 $WORKFLOW_DATA_DIR/$feature_name/spec-review.md" \
         "请向用户展示以上问题，询问修改方向。用户回复后执行：/fix-spec $feature_name {用户的修改指导}" \
         "$feature_name"
       echo "  ❌ $critical_count 个 CRITICAL_ISSUES，已自动暂停（/fix-spec 恢复）" >&2
@@ -240,7 +240,7 @@ step1_spec_writer() {
     # 验证三个文件是否已标记为 reviewed
     local reviewed_count=0
     for doc in requirements.md design.md tasks.md; do
-      if grep -qi "reviewed\|status:.*reviewed" "$PROJECT_ROOT/specs/$feature_name/$doc" 2>/dev/null; then
+      if grep -qi "reviewed\|status:.*reviewed" "$WORKFLOW_DATA_DIR/$feature_name/$doc" 2>/dev/null; then
         reviewed_count=$((reviewed_count + 1))
       fi
     done
@@ -261,10 +261,10 @@ step1_spec_writer() {
 step1_restart_with_diff() {
   local feature_name="$1"
   local paused_step="$2"
-  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  local spec_dir="$WORKFLOW_DATA_DIR/$feature_name"
   local req_file="$spec_dir/requirements.md"
   local snapshot_file="$spec_dir/requirements.md.snapshot"
-  local pipeline_log="$PROJECT_ROOT/specs/.workflow-log"
+  local pipeline_log="$WORKFLOW_DATA_DIR/.workflow-log"
   local model
   model=$(select_model "low")
 
@@ -310,7 +310,7 @@ step1_restart_with_diff() {
     ---DIFF END---
 
     任务（Stage 1a'）：
-    - 仅覆写 specs/$feature_name/requirements.md
+    - 仅覆写 $WORKFLOW_DATA_DIR/$feature_name/requirements.md
     - 保留用户的所有意图和新增内容，不做删减
     - 补全格式：标准 Markdown 结构、验收标准、边界说明
     - 对仍不确定的需求项打上 [UNCERTAIN] 标记并写入开放问题 section

@@ -3,7 +3,7 @@
 # Sourced by v4/handler.sh; depends on common.sh (feishu_notify, log)
 #
 # 在流水线每个 Step 的开始/结束时推送结构化进度到飞书，
-# 同时写入 specs/{feature}/progress.md 供 /status 离线查看。
+# 同时写入 $WORKFLOW_DATA_DIR/{feature}/progress.md 供 /status 离线查看。
 #
 # 用法:
 #   progress_init         feature_name total_steps input
@@ -20,11 +20,11 @@
 # ============================================================
 
 _progress_file() {
-  echo "$PROJECT_ROOT/specs/$1/progress.md"
+  echo "$WORKFLOW_DATA_DIR/$1/progress.md"
 }
 
 _progress_json() {
-  echo "$PROJECT_ROOT/specs/$1/progress.json"
+  echo "$WORKFLOW_DATA_DIR/$1/progress.json"
 }
 
 # 初始化 progress.json 内部状态
@@ -228,7 +228,7 @@ progress_step_start() {
   fi
 
   # 记录开始时间（写到临时文件供 step_done 计算耗时）
-  echo "$(date +%s)" > "$PROJECT_ROOT/specs/$feature/.step${step_num}_start"
+  echo "$(date +%s)" > "$WORKFLOW_DATA_DIR/$feature/.step${step_num}_start"
 
   # 飞书推送
   local total_steps
@@ -248,7 +248,7 @@ progress_step_done() {
 
   # 计算耗时
   local duration_str="-"
-  local start_file="$PROJECT_ROOT/specs/$feature/.step${step_num}_start"
+  local start_file="$WORKFLOW_DATA_DIR/$feature/.step${step_num}_start"
   if [ -f "$start_file" ]; then
     local start_ts end_ts elapsed
     start_ts=$(cat "$start_file")
@@ -319,7 +319,7 @@ progress_step_fail() {
 
   # 计算耗时
   local duration_str="-"
-  local start_file="$PROJECT_ROOT/specs/$feature/.step${step_num}_start"
+  local start_file="$WORKFLOW_DATA_DIR/$feature/.step${step_num}_start"
   if [ -f "$start_file" ]; then
     local start_ts end_ts elapsed
     start_ts=$(cat "$start_file")
@@ -455,12 +455,12 @@ progress_finish() {
 
     # 收集测试和审查摘要
     local coverage="N/A" review_status="N/A"
-    local test_report="$PROJECT_ROOT/specs/$feature/test-report.md"
+    local test_report="$WORKFLOW_DATA_DIR/$feature/test-report.md"
     if [ -f "$test_report" ]; then
       coverage=$(sed -n 's/.*Statements[[:space:]]*|[[:space:]]*\([0-9][0-9]*%\).*/\1/p' "$test_report" 2>/dev/null | head -1)
       [ -z "$coverage" ] && coverage="N/A"
     fi
-    local review_report="$PROJECT_ROOT/specs/$feature/review-report.md"
+    local review_report="$WORKFLOW_DATA_DIR/$feature/review-report.md"
     if [ -f "$review_report" ]; then
       review_status=$(grep -o 'PASS\|FAIL' "$review_report" 2>/dev/null | tail -1)
       [ -z "$review_status" ] && review_status="N/A"
@@ -485,7 +485,7 @@ progress_render() {
 # 渲染所有活跃 feature 的进度（供 /status 使用）
 progress_render_all() {
   local has_progress=false
-  for pjson in "$PROJECT_ROOT"/specs/*/progress.json; do
+  for pjson in "$WORKFLOW_DATA_DIR"/*/progress.json; do
     [ -f "$pjson" ] || continue
     has_progress=true
     local feature

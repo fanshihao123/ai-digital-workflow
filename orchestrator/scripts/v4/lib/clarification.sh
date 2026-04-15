@@ -5,7 +5,7 @@
 # 从 requirements.md 的"开放问题"部分提取未勾选的 [ ] 项
 extract_open_questions() {
   local feature_name="$1"
-  local req_file="$PROJECT_ROOT/specs/$feature_name/requirements.md"
+  local req_file="$WORKFLOW_DATA_DIR/$feature_name/requirements.md"
   [ -f "$req_file" ] || return 0
   local in_section=false
   while IFS= read -r line; do
@@ -21,12 +21,12 @@ extract_open_questions() {
   done < "$req_file"
 }
 
-# 保存暂停等待状态到 specs/{feature}/awaiting-clarification.json
+# 保存暂停等待状态到 $WORKFLOW_DATA_DIR/{feature}/awaiting-clarification.json
 save_clarification_state() {
   local feature_name="$1"
   local original_input="$2"
   local questions_text="$3"
-  local state_file="$PROJECT_ROOT/specs/$feature_name/awaiting-clarification.json"
+  local state_file="$WORKFLOW_DATA_DIR/$feature_name/awaiting-clarification.json"
   jq -n \
     --arg feature "$feature_name" \
     --arg input "$original_input" \
@@ -39,7 +39,7 @@ save_clarification_state() {
 # 检查是否有待确认的暂停状态
 has_pending_clarification() {
   local feature_name="$1"
-  local state_file="$PROJECT_ROOT/specs/$feature_name/awaiting-clarification.json"
+  local state_file="$WORKFLOW_DATA_DIR/$feature_name/awaiting-clarification.json"
   [ -f "$state_file" ] && jq -e '.status == "awaiting"' "$state_file" >/dev/null 2>&1
 }
 
@@ -47,7 +47,7 @@ has_pending_clarification() {
 get_clarification_field() {
   local feature_name="$1"
   local field="$2"
-  local state_file="$PROJECT_ROOT/specs/$feature_name/awaiting-clarification.json"
+  local state_file="$WORKFLOW_DATA_DIR/$feature_name/awaiting-clarification.json"
   [ -f "$state_file" ] && jq -r ".$field // empty" "$state_file" 2>/dev/null || true
 }
 
@@ -55,7 +55,7 @@ get_clarification_field() {
 mark_clarification_answered() {
   local feature_name="$1"
   local answers="$2"
-  local state_file="$PROJECT_ROOT/specs/$feature_name/awaiting-clarification.json"
+  local state_file="$WORKFLOW_DATA_DIR/$feature_name/awaiting-clarification.json"
   if [ -f "$state_file" ]; then
     local tmp; tmp=$(mktemp)
     jq --arg ans "$answers" '.status="answered"|.answers=$ans' "$state_file" > "$tmp" && mv "$tmp" "$state_file"

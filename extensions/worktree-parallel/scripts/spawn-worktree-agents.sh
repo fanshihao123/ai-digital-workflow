@@ -8,7 +8,7 @@ FEATURE_NAME="${1:?用法: spawn-worktree-agents.sh <feature-name> <assignment-j
 ASSIGNMENT_FILE="${2:?请提供 .agent-assignment.json 路径}"
 PROJECT_ROOT=$(git rev-parse --show-toplevel)
 BASE_BRANCH=$(git branch --show-current)
-LOG_FILE="$PROJECT_ROOT/specs/${FEATURE_NAME}/.workflow-log"
+LOG_FILE="$WORKFLOW_DATA_DIR/${FEATURE_NAME}/.workflow-log"
 
 # 加载公共函数库（如果存在）
 COMMON_SH="$PROJECT_ROOT/.claude/orchestrator/scripts/lib/common.sh"
@@ -23,7 +23,7 @@ if ! jq empty "$ASSIGNMENT_FILE" 2>/dev/null; then
   exit 1
 fi
 
-mkdir -p "$PROJECT_ROOT/specs/${FEATURE_NAME}"
+mkdir -p "$WORKFLOW_DATA_DIR/${FEATURE_NAME}"
 echo "[$(date +%H:%M:%S)] MULTI_AGENT_START: $FEATURE_NAME (base: $BASE_BRANCH)" >> "$LOG_FILE"
 
 # ------------------------------------------
@@ -78,7 +78,7 @@ for GROUP in $GROUPS; do
     FILE_SCOPE=$(jq -r ".agents[] | select(.id==\"$AGENT_ID\") | .file_scope | join(\", \")" "$ASSIGNMENT_FILE")
 
     ABS_WORKTREE="$PROJECT_ROOT/$WORKTREE_DIR"
-    SPECS_PATH="$PROJECT_ROOT/specs/${FEATURE_NAME}"
+    SPECS_PATH="$WORKFLOW_DATA_DIR/${FEATURE_NAME}"
 
     case "$ROLE" in
       developer)

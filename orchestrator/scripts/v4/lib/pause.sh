@@ -5,7 +5,7 @@
 # 检查是否处于 /pause 手动暂停状态
 has_paused_state() {
   local feature_name="$1"
-  local state_file="$PROJECT_ROOT/specs/$feature_name/paused.json"
+  local state_file="$WORKFLOW_DATA_DIR/$feature_name/paused.json"
   [ -f "$state_file" ] && jq -e '.status == "paused"' "$state_file" >/dev/null 2>&1
 }
 
@@ -13,7 +13,7 @@ has_paused_state() {
 get_paused_field() {
   local feature_name="$1"
   local field="$2"
-  local state_file="$PROJECT_ROOT/specs/$feature_name/paused.json"
+  local state_file="$WORKFLOW_DATA_DIR/$feature_name/paused.json"
   [ -f "$state_file" ] && jq -r ".$field // empty" "$state_file" 2>/dev/null || true
 }
 
@@ -23,7 +23,7 @@ ensure_not_paused() {
   local context="${2:-workflow}"
   if has_paused_state "$feature_name"; then
     echo "  [paused-check] '$feature_name' 已处于 paused，停止 $context" >&2
-    log "PIPELINE_STOPPED_BY_PAUSE: $feature_name ($context)" "$PROJECT_ROOT/specs/.workflow-log"
+    log "PIPELINE_STOPPED_BY_PAUSE: $feature_name ($context)" "$WORKFLOW_DATA_DIR/.workflow-log"
     return 1
   fi
   return 0

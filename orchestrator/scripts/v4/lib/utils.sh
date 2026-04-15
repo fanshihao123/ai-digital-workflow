@@ -69,7 +69,7 @@ first_existing_file() {
 
 has_reviewed_spec() {
   local feature_name="$1"
-  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  local spec_dir="$WORKFLOW_DATA_DIR/$feature_name"
 
   [ -f "$spec_dir/requirements.md" ] || return 1
   [ -f "$spec_dir/design.md" ] || return 1
@@ -85,13 +85,13 @@ has_reviewed_spec() {
 # requirements/design/tasks/awaiting-clarification 文件来判断当前活跃 feature。
 detect_feature_name() {
   local latest_file latest_feature
-  latest_file=$(find "$PROJECT_ROOT/specs" -mindepth 2 -maxdepth 2 -type f \
+  latest_file=$(find "$WORKFLOW_DATA_DIR" -mindepth 2 -maxdepth 2 -type f \
     \( -name 'requirements.md' -o -name 'design.md' -o -name 'tasks.md' -o -name 'awaiting-clarification.json' -o -name 'awaiting-spec-review.json' \) \
     ! -path '*/archive/*' \
     -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -1)
 
   if [ -n "$latest_file" ]; then
-    latest_feature=$(echo "$latest_file" | sed "s|$PROJECT_ROOT/specs/||" | cut -d/ -f1)
+    latest_feature=$(echo "$latest_file" | sed "s|$WORKFLOW_DATA_DIR/||" | cut -d/ -f1)
     echo "$latest_feature"
     return
   fi
@@ -99,7 +99,7 @@ detect_feature_name() {
   # fallback：仅当目录下确实存在 requirements.md 时才返回
   # 避免空目录或只有 state.json 的旧目录导致误判
   local fallback_dir
-  for fallback_dir in $(find "$PROJECT_ROOT/specs" -mindepth 1 -maxdepth 1 -type d \
+  for fallback_dir in $(find "$WORKFLOW_DATA_DIR" -mindepth 1 -maxdepth 1 -type d \
     ! -name 'archive' -print0 2>/dev/null | xargs -0 ls -td 2>/dev/null); do
     if [ -s "$fallback_dir/requirements.md" ]; then
       basename "$fallback_dir"
@@ -111,7 +111,7 @@ detect_feature_name() {
 # 从 design.md 提取复杂度（macOS 兼容）
 get_complexity() {
   local feature_name="$1"
-  local design_file="$PROJECT_ROOT/specs/$feature_name/design.md"
+  local design_file="$WORKFLOW_DATA_DIR/$feature_name/design.md"
   if [ -f "$design_file" ]; then
     local val
     val=$(sed -n 's/.*复杂度：[[:space:]]*\([a-zA-Z]*\).*/\1/p' "$design_file" 2>/dev/null | head -1)
@@ -125,7 +125,7 @@ get_complexity() {
 # 从 requirements.md 提取 Jira issue key（macOS 兼容）
 get_jira_key() {
   local feature_name="$1"
-  local req_file="$PROJECT_ROOT/specs/$feature_name/requirements.md"
+  local req_file="$WORKFLOW_DATA_DIR/$feature_name/requirements.md"
   if [ -f "$req_file" ]; then
     local val
     val=$(sed -n 's/.*Jira[：:][[:space:]]*\([A-Z][A-Z]*-[0-9][0-9]*\).*/\1/p' "$req_file" 2>/dev/null | head -1)

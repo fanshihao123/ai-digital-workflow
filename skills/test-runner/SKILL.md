@@ -26,7 +26,7 @@ description: >
 
 ```bash
 npx jest --coverage --findRelatedTests <changed-files> \
-  --json --outputFile=specs/{feature-name}/unit-report.json
+  --json --outputFile=$WORKFLOW_DATA_DIR/{feature-name}/unit-report.json
 # 或 Vitest
 npx vitest run --coverage --reporter=json <related-test-files>
 ```
@@ -55,7 +55,7 @@ export default defineConfig({
     },
   },
   reporter: [
-    ['json', { outputFile: 'specs/{feature-name}/e2e-report.json' }],
+    ['json', { outputFile: '$WORKFLOW_DATA_DIR/{feature-name}/e2e-report.json' }],
   ],
 });
 ```
@@ -71,7 +71,7 @@ npx playwright test --reporter=json
 在 feature-scope 通过后，可以再跑更广范围的测试来识别历史债或潜在回归，例如：
 
 ```bash
-npx jest --coverage --json --outputFile=specs/{feature-name}/repo-unit-report.json
+npx jest --coverage --json --outputFile=$WORKFLOW_DATA_DIR/{feature-name}/repo-unit-report.json
 npx playwright test --reporter=json
 ```
 
@@ -79,7 +79,7 @@ npx playwright test --reporter=json
 
 ### Step 4：生成统一报告
 
-保存到 `specs/{feature-name}/test-report.md`：
+保存到 `$WORKFLOW_DATA_DIR/{feature-name}/test-report.md`：
 
 ```markdown
 # 测试报告：{需求名称}

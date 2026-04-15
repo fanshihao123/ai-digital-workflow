@@ -4,7 +4,7 @@
 
 cmd_resume() {
   local feature_name="$1"
-  local pipeline_log="$PROJECT_ROOT/specs/.workflow-log"
+  local pipeline_log="$WORKFLOW_DATA_DIR/.workflow-log"
 
   # 若未指定 feature，自动检测
   if [ -z "$feature_name" ]; then

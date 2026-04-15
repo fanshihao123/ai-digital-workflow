@@ -20,7 +20,7 @@ step7_notify() {
   commit_msg=$(git -C "$PROJECT_ROOT" log --oneline -1 --format="%s" 2>/dev/null || echo "N/A")
 
   # 从测试报告提取覆盖率
-  local test_report="$PROJECT_ROOT/specs/$feature_name/test-report.md"
+  local test_report="$WORKFLOW_DATA_DIR/$feature_name/test-report.md"
   if [ -f "$test_report" ]; then
     coverage=$(sed -n 's/.*Statements[[:space:]]*|[[:space:]]*\([0-9][0-9]*%\).*/\1/p' "$test_report" 2>/dev/null | head -1)
     [ -z "$coverage" ] && coverage="N/A"
@@ -29,7 +29,7 @@ step7_notify() {
   fi
 
   # 从审查报告提取结论
-  local review_report="$PROJECT_ROOT/specs/$feature_name/review-report.md"
+  local review_report="$WORKFLOW_DATA_DIR/$feature_name/review-report.md"
   if [ -f "$review_report" ]; then
     review_status=$(sed -n 's/.*结论：[[:space:]]*\([^[:space:]]*\).*/\1/p' "$review_report" 2>/dev/null | head -1)
     if [ -z "$review_status" ]; then

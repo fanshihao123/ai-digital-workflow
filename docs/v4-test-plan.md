@@ -92,7 +92,7 @@ EOF
 
 | # | 测试 | 命令 | 验证目标 | 预期结果 |
 |---|------|------|---------|---------|
-| 2.1 | 启动工作流 | 见下方详细步骤 | Step 0~7 全流程 | 生成 specs/{feature}/ 三文档，执行开发、审查、测试、文档 |
+| 2.1 | 启动工作流 | 见下方详细步骤 | Step 0~7 全流程 | 生成 $WORKFLOW_DATA_DIR/{feature}/ 三文档，执行开发、审查、测试、文档 |
 
 **详细步骤：**
 
@@ -108,23 +108,23 @@ opencli claude --permission-mode bypassPermissions \
 
 - [ ] **Step 0 (prepare)**: `.claude/` 目录存在，知识库文件加载
 - [ ] **Step 1 (spec-writer)**:
-  - `specs/{feature}/requirements.md` 已生成
-  - `specs/{feature}/design.md` 已生成，含 `complexity` 评级
-  - `specs/{feature}/tasks.md` 已生成，含原子任务列表
+  - `$WORKFLOW_DATA_DIR/{feature}/requirements.md` 已生成
+  - `$WORKFLOW_DATA_DIR/{feature}/design.md` 已生成，含 `complexity` 评级
+  - `$WORKFLOW_DATA_DIR/{feature}/tasks.md` 已生成，含原子任务列表
   - 无 `[UNCERTAIN]` 标记（简单需求不应有）
 - [ ] **Step 2 (develop)**: `src/index.ts` 新增 `multiply` 函数
-- [ ] **Step 3 (review)**: `specs/{feature}/code-review.md` 或 `spec-review.md` 生成
-- [ ] **Step 4 (test)**: 测试通过，`specs/{feature}/test-report.md` 生成
+- [ ] **Step 3 (review)**: `$WORKFLOW_DATA_DIR/{feature}/code-review.md` 或 `spec-review.md` 生成
+- [ ] **Step 4 (test)**: 测试通过，`$WORKFLOW_DATA_DIR/{feature}/test-report.md` 生成
 - [ ] **Step 5 (doc-sync)**: 文档更新
 - [ ] **Step 6 (deploy)**: 跳过（`ENABLE_DEPLOY=false`）
-- [ ] **Step 7 (notify)**: 完成日志写入 `specs/.workflow-log`
-- [ ] **state.json**: `specs/{feature}/state.json` 状态为 `done`
+- [ ] **Step 7 (notify)**: 完成日志写入 `$WORKFLOW_DATA_DIR/.workflow-log`
+- [ ] **state.json**: `$WORKFLOW_DATA_DIR/{feature}/state.json` 状态为 `done`
 
 ```bash
 # 验证产物
-ls specs/*/
-cat specs/*/state.json
-cat specs/.workflow-log | tail -20
+ls $WORKFLOW_DATA_DIR/*/
+cat $WORKFLOW_DATA_DIR/*/state.json
+cat $WORKFLOW_DATA_DIR/.workflow-log | tail -20
 ```
 
 ### Phase 3: 开放问题 → 暂停 → /answer 恢复
@@ -141,16 +141,16 @@ opencli claude --permission-mode bypassPermissions \
 # 预期：需求模糊 → spec-writer 标记 [UNCERTAIN] → 暂停
 
 # 检查状态
-cat specs/*/state.json   # status 应为 "awaiting-answer"
-cat specs/*/requirements.md  # 搜索 [UNCERTAIN] 和 [ ] 未勾选项
+cat $WORKFLOW_DATA_DIR/*/state.json   # status 应为 "awaiting-answer"
+cat $WORKFLOW_DATA_DIR/*/requirements.md  # 搜索 [UNCERTAIN] 和 [ ] 未勾选项
 
 # 3.2 回答问题恢复
-FEATURE=$(ls specs/ | grep -v archive | grep -v .workflow-log | head -1)
+FEATURE=$(ls $WORKFLOW_DATA_DIR/ | grep -v archive | grep -v .workflow-log | head -1)
 opencli claude --permission-mode bypassPermissions \
   -p "/answer $FEATURE 1.用户系统只需要注册和登录 2.使用邮箱验证 3.密码用bcrypt加密 4.不需要OAuth"
 
 # 检查恢复
-cat specs/$FEATURE/state.json  # status 应变为 "running" 或最终 "done"
+cat $WORKFLOW_DATA_DIR/$FEATURE/state.json  # status 应变为 "running" 或最终 "done"
 ```
 
 ### Phase 4: /pause → /restart 流程
@@ -170,17 +170,17 @@ opencli claude --permission-mode bypassPermissions \
   -p '/pause'
 
 # 检查
-FEATURE=$(ls specs/ | grep divide | head -1)
-cat specs/$FEATURE/state.json  # status: "paused", step 记录断点
+FEATURE=$(ls $WORKFLOW_DATA_DIR/ | grep divide | head -1)
+cat $WORKFLOW_DATA_DIR/$FEATURE/state.json  # status: "paused", step 记录断点
 
 # 4.2 修改需求后重启
 # 编辑 requirements.md，加一条需求
-echo "- 新增：支持取模运算" >> specs/$FEATURE/requirements.md
+echo "- 新增：支持取模运算" >> $WORKFLOW_DATA_DIR/$FEATURE/requirements.md
 opencli claude --permission-mode bypassPermissions \
   -p "/restart $FEATURE 新增取模运算支持"
 
 # 预期：检测到 requirements diff → 更新 design.md + tasks.md → 从断点继续
-cat specs/$FEATURE/state.json
+cat $WORKFLOW_DATA_DIR/$FEATURE/state.json
 ```
 
 ### Phase 5: 崩溃恢复 /resume
@@ -199,8 +199,8 @@ sleep 60  # 等进入 Step 2+
 kill $PIPELINE_PID
 
 # 5.2 恢复
-FEATURE=$(ls specs/ | grep subtract | head -1)
-cat specs/$FEATURE/state.json  # status: "failed" 或 "running"（取决于 trap 是否执行）
+FEATURE=$(ls $WORKFLOW_DATA_DIR/ | grep subtract | head -1)
+cat $WORKFLOW_DATA_DIR/$FEATURE/state.json  # status: "failed" 或 "running"（取决于 trap 是否执行）
 
 opencli claude --permission-mode bypassPermissions \
   -p "/resume $FEATURE"
@@ -222,8 +222,8 @@ opencli claude --permission-mode bypassPermissions \
   -p '/start-workflow 添加用户密码重置功能，密码明文存储在数据库中'
 
 # 如果触发了 CRITICAL 审查阻断：
-FEATURE=$(ls specs/ | grep -v archive | grep -v .workflow-log | sort -t/ -k1 | tail -1)
-cat specs/$FEATURE/state.json  # 检查是否 "awaiting-fix"
+FEATURE=$(ls $WORKFLOW_DATA_DIR/ | grep -v archive | grep -v .workflow-log | sort -t/ -k1 | tail -1)
+cat $WORKFLOW_DATA_DIR/$FEATURE/state.json  # 检查是否 "awaiting-fix"
 
 # 修复
 opencli claude --permission-mode bypassPermissions \
@@ -252,7 +252,7 @@ opencli claude --permission-mode bypassPermissions \
 
 ```bash
 # 先确保有一个已完成开发的 feature
-FEATURE=$(ls specs/ | grep multiply | head -1)
+FEATURE=$(ls $WORKFLOW_DATA_DIR/ | grep multiply | head -1)
 
 opencli claude --permission-mode bypassPermissions \
   -p "/review $FEATURE"
@@ -265,7 +265,7 @@ opencli claude --permission-mode bypassPermissions \
 
 ```bash
 # 检查所有 feature 的状态
-for d in specs/*/; do
+for d in $WORKFLOW_DATA_DIR/*/; do
   if [ -f "$d/state.json" ]; then
     echo "=== $(basename $d) ==="
     cat "$d/state.json" | jq '{status, step, updated_at}'
@@ -273,7 +273,7 @@ for d in specs/*/; do
 done
 
 # 检查 workflow-log 时间线
-cat specs/.workflow-log
+cat $WORKFLOW_DATA_DIR/.workflow-log
 ```
 
 ### Phase 10: 扩展功能（可选）
@@ -303,8 +303,8 @@ opencli claude --permission-mode bypassPermissions \
   -p '/start-workflow 添加一个 multiply(a, b) 函数到 src/index.ts'
 
 # 3. 检查产物
-ls specs/*/
-cat specs/*/state.json | jq .status
+ls $WORKFLOW_DATA_DIR/*/
+cat $WORKFLOW_DATA_DIR/*/state.json | jq .status
 ```
 
 ---
@@ -317,5 +317,5 @@ cat specs/*/state.json | jq .status
 | Step 1 卡住 | Claude Code 权限模式未设置 | 确保用 `--permission-mode bypassPermissions` |
 | Codex 审查跳过 | `OPENAI_API_KEY` 未配置 | 审查会 fallback 到 Claude，不阻塞 |
 | 飞书通知无效 | `FEISHU_NOTIFY_TARGET` 未配置 | 本地验证可忽略，通知会静默跳过 |
-| state.json 不存在 | 流水线还没跑到写状态的阶段 | 检查 `specs/.workflow-log` 看进度 |
+| state.json 不存在 | 流水线还没跑到写状态的阶段 | 检查 `$WORKFLOW_DATA_DIR/.workflow-log` 看进度 |
 | `/pause` 后 `/restart` 被拒 | 有未解决的 spec review CRITICAL | 改用 `/fix-spec` 先解决审查问题 |

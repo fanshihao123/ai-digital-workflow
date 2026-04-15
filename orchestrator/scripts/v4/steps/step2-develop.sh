@@ -7,7 +7,7 @@ step2_develop() {
   local feature_name="$1"
   local complexity
   complexity=$(get_complexity "$feature_name")
-  local tasks_file="$PROJECT_ROOT/specs/$feature_name/tasks.md"
+  local tasks_file="$WORKFLOW_DATA_DIR/$feature_name/tasks.md"
 
   ensure_not_paused "$feature_name" "step2_develop" || return 0
 
@@ -57,7 +57,7 @@ step2_develop() {
 step2_sequential() {
   local feature_name="$1"
   local model="$2"
-  local tasks_file="$PROJECT_ROOT/specs/$feature_name/tasks.md"
+  local tasks_file="$WORKFLOW_DATA_DIR/$feature_name/tasks.md"
 
   local has_antigravity
   has_antigravity=$(count_pattern_in_file "agent: antigravity" "$tasks_file")
@@ -92,7 +92,7 @@ step2_sequential() {
 
     # Figma MCP 日志：Step 2a 开始
     echo "  [Step 2a][debug] before figma_mcp_log step2a_start" >&2
-    local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+    local spec_dir="$WORKFLOW_DATA_DIR/$feature_name"
     figma_mcp_log "$spec_dir" "step2a_start" "$(jq -n \
       --arg feature "$feature_name" --argjson count "$has_antigravity" --arg base_url "$base_url" \
       '{feature: $feature, antigravity_task_count: $count, base_url: $base_url}')"
@@ -126,7 +126,7 @@ step2_sequential() {
       fi
     done
 
-    local restore_log_path="specs/$feature_name/ui-restore-log.json"
+    local restore_log_path="$WORKFLOW_DATA_DIR/$feature_name/ui-restore-log.json"
 
     # 验证：所有 antigravity 任务必须在 tasks.md 中标记为 done
     local undone_tasks=""
@@ -171,7 +171,7 @@ step2_sequential() {
 
       notify "❌ Step 2a 失败: Task${undone_tasks} 未完成\n${failure_detail}${diag_hint}\nSee: ${restore_log_path}" "$feature_name"
       agent_notify \
-        "需求 '$feature_name' 的 UI 还原未完成。\n\n未完成的 Task:${undone_tasks}\n已完成的 Task:${succeeded_tasks:-无}\n\n失败诊断:${failure_detail}${diag_hint}\n\nFigma MCP 日志: specs/$feature_name/figma-mcp-log.json\n详细日志: ${restore_log_path}\n截图路径: /tmp/ui-restore-${feature_name}-*\n\n请检查后重新执行。" \
+        "需求 '$feature_name' 的 UI 还原未完成。\n\n未完成的 Task:${undone_tasks}\n已完成的 Task:${succeeded_tasks:-无}\n\n失败诊断:${failure_detail}${diag_hint}\n\nFigma MCP 日志: $WORKFLOW_DATA_DIR/$feature_name/figma-mcp-log.json\n详细日志: ${restore_log_path}\n截图路径: /tmp/ui-restore-${feature_name}-*\n\n请检查后重新执行。" \
         "用户可以 /resume $feature_name 重试，或手动修改后继续" \
         "$feature_name"
 
@@ -231,17 +231,17 @@ ISSUES:
     LINE: {行号}
     ISSUE: {问题描述}
     FIX: {修复建议}
-        " > "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null || true
+        " > "$WORKFLOW_DATA_DIR/$feature_name/ui-codex-review.md" 2>/dev/null || true
 
         local codex_verdict
         codex_verdict=$(grep "^CODEX_VERDICT:" \
-          "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null \
+          "$WORKFLOW_DATA_DIR/$feature_name/ui-codex-review.md" 2>/dev/null \
           | sed 's/CODEX_VERDICT:[[:space:]]*//' | tr -d ' \r')
 
         if [ "$codex_verdict" = "FAIL" ]; then
           local error_issues
           error_issues=$(grep -A3 "SEVERITY: ERROR" \
-            "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null || echo "")
+            "$WORKFLOW_DATA_DIR/$feature_name/ui-codex-review.md" 2>/dev/null || echo "")
           if [ -n "$error_issues" ]; then
             echo "  [Step 2a] Codex 发现 ERROR 级问题，触发 Antigravity 修复..." >&2
             antigravity_send_message \
@@ -251,7 +251,7 @@ $error_issues
           fi
           local warning_issues
           warning_issues=$(grep -A3 "SEVERITY: WARNING" \
-            "$PROJECT_ROOT/specs/$feature_name/ui-codex-review.md" 2>/dev/null || echo "")
+            "$WORKFLOW_DATA_DIR/$feature_name/ui-codex-review.md" 2>/dev/null || echo "")
           [ -n "$warning_issues" ] && \
             notify "⚠️ UI Codex 审查警告（不阻塞）:\n$warning_issues" "$feature_name"
         fi

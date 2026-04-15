@@ -11,7 +11,6 @@ echo "== AI数字员工24小时可编排工作流 — 初始化: $PROJECT_ROOT =
 echo "=================================================="
 
 mkdir -p "$PROJECT_ROOT/.claude"/{skills,extensions,orchestrator,commands,logs}
-mkdir -p "$PROJECT_ROOT/specs/archive"
 
 echo "-- 安装 4 个核心 skill..."
 for s in spec-writer code-reviewer test-runner doc-syncer; do
@@ -84,6 +83,11 @@ if [ ! -f "$PROJECT_ROOT/.env.ai-digital-workflow" ]; then
 # ==========================================
 # AI数字员工24小时可编排工作流 配置
 # ==========================================
+
+# --- 工作流数据目录 ---
+# specs/状态/日志等产物存放位置（不放在项目仓库内，避免污染）
+# 默认：~/.ai-workflow/data/{项目名}
+# WORKFLOW_DATA_DIR=
 
 # --- openclaw ---
 # openclaw 可执行文件绝对路径（which openclaw 获取）

@@ -87,7 +87,7 @@ orchestrator/scripts/
         ├── review.sh, test.sh, status.sh, deploy.sh, rollback.sh
 ```
 
-**状态机**（`lib/state.sh`）：统一 `specs/{feature}/state.json` 管理所有 feature 状态，支持状态转移验证
+**状态机**（`lib/state.sh`）：统一 `$WORKFLOW_DATA_DIR/{feature}/state.json` 管理所有 feature 状态，支持状态转移验证
 
 ### 工作流管家 Agent
 
@@ -212,7 +212,7 @@ spec-writer 在生成文档时使用两级标记处理信息不足的情况：
 - `[UNCERTAIN]` — 影响架构或关键功能的不确定项，写入 `requirements.md` 的"开放问题"部分，**触发暂停**
 
 工作流在 Stage 1a（仅生成 requirements.md）完成后自动检测未勾选的 `[ ]` 项，若存在则：
-1. 保存状态到 `specs/{feature}/awaiting-clarification.json`
+1. 保存状态到 `$WORKFLOW_DATA_DIR/{feature}/awaiting-clarification.json`
 2. 飞书发送问题列表并暂停（`/hotfix` 跳过此机制）
 3. 用户通过 `/answer {feature} 1.答案 2.答案` 答复
 4. 工作流仅更新 requirements.md，确认无歧义后才进入 Stage 1b 生成 design.md + tasks.md
@@ -387,7 +387,7 @@ SCORE < 8 → 人工确认节点（agent_notify 发飞书附截图）
 - **开放问题检测**: Stage 1 完成后自动扫描 `requirements.md` 中未勾选的 `[ ]` 项，若存在则暂停流水线
 - **两级不确定标记**: `[INFERRED]`（直接写入，不暂停）vs `[UNCERTAIN]`（必须询问用户）
 - **飞书问答恢复**: 暂停时推送问题列表，用户通过 `/answer {feature} 答复` 恢复，支持多轮澄清
-- **澄清状态持久化**: 等待状态保存在 `specs/{feature}/awaiting-clarification.json`，进程重启不丢失
+- **澄清状态持久化**: 等待状态保存在 `$WORKFLOW_DATA_DIR/{feature}/awaiting-clarification.json`，进程重启不丢失
 - **`run_pipeline_steps_2_to_7()` 提取**: Steps 2-7 逻辑独立成函数，澄清恢复路径与正常路径共用
 
 ## Recent Improvements (2026-03-25)

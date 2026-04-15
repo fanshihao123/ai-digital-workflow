@@ -4,7 +4,7 @@
 
 cmd_restart() {
   local feature_name="$1"
-  local pipeline_log="$PROJECT_ROOT/specs/.workflow-log"
+  local pipeline_log="$WORKFLOW_DATA_DIR/.workflow-log"
 
   if [ -z "$feature_name" ]; then
     feature_name=$(detect_feature_name)
@@ -49,7 +49,7 @@ cmd_restart() {
   # 当断点已经在 Step 3 及之后，默认视为执行态恢复，不再回到 spec diff/update
   if is_numeric "$paused_step" && [ "$paused_step" -ge 3 ]; then
     echo "  [restart] 断点 >= Step 3，跳过 requirements diff，直接从断点继续" >&2
-    rm -f "$PROJECT_ROOT/specs/$feature_name/paused.json"
+    rm -f "$WORKFLOW_DATA_DIR/$feature_name/paused.json"
     log "PIPELINE_PAUSED_STATE_CLEARED: $feature_name" "$pipeline_log"
     notify "▶️ 从 Step $paused_step 继续工作流: $feature_name"
     log "PIPELINE_RESTART_RESUME: $feature_name from Step $paused_step" "$pipeline_log"
@@ -66,7 +66,7 @@ cmd_restart() {
   fi
 
   # 检查快照是否存在
-  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  local spec_dir="$WORKFLOW_DATA_DIR/$feature_name"
   local snapshot_file="$spec_dir/requirements.md.snapshot"
   if [ ! -f "$snapshot_file" ]; then
     echo "  ⚠️ 未找到 requirements.md.snapshot，跳过 diff，直接从断点继续" >&2

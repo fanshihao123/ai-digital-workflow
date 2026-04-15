@@ -11,7 +11,7 @@ FEATURE_NAME="${2:?请提供功能名称}"
 SUMMARY="${3:-无附加说明}"
 
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-LOG_FILE="$PROJECT_ROOT/specs/${FEATURE_NAME}/.workflow-log"
+LOG_FILE="$WORKFLOW_DATA_DIR/${FEATURE_NAME}/.workflow-log"
 TIMEOUT="${HITL_TIMEOUT:-3600}"
 
 # 加载环境变量
@@ -64,8 +64,8 @@ collect_form_data() {
         tr '\n' ', ' || echo "none")
 
       sec_findings="无"
-      if [ -f "$PROJECT_ROOT/specs/${feature}/review-report.md" ]; then
-        sec_findings=$(grep -i "SEC-" "$PROJECT_ROOT/specs/${feature}/review-report.md" | head -5 || echo "无")
+      if [ -f "$WORKFLOW_DATA_DIR/${feature}/review-report.md" ]; then
+        sec_findings=$(grep -i "SEC-" "$WORKFLOW_DATA_DIR/${feature}/review-report.md" | head -5 || echo "无")
       fi
 
       # 用 jq 安全构建 JSON
@@ -89,8 +89,8 @@ collect_form_data() {
       # 部署门控特有字段
       local coverage commits rollback
       coverage="unknown"
-      if [ -f "$PROJECT_ROOT/specs/${feature}/test-report.md" ]; then
-        coverage=$(grep -oP 'Statements.*?(\d+)%' "$PROJECT_ROOT/specs/${feature}/test-report.md" | grep -oP '\d+%' | head -1 || echo "unknown")
+      if [ -f "$WORKFLOW_DATA_DIR/${feature}/test-report.md" ]; then
+        coverage=$(grep -oP 'Statements.*?(\d+)%' "$WORKFLOW_DATA_DIR/${feature}/test-report.md" | grep -oP '\d+%' | head -1 || echo "unknown")
       fi
 
       commits=$(git log --oneline "${default_branch}..HEAD" 2>/dev/null | head -10 || echo "none")

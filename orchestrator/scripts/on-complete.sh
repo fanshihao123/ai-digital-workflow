@@ -5,13 +5,13 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-ACTIVE_FEATURE=$(ls -t "$PROJECT_ROOT"/specs/*/tasks.md 2>/dev/null | head -1 | sed "s|$PROJECT_ROOT/specs/||;s|/tasks.md||" || echo "")
+ACTIVE_FEATURE=$(ls -t "$WORKFLOW_DATA_DIR"/*/tasks.md 2>/dev/null | head -1 | sed "s|$WORKFLOW_DATA_DIR/||;s|/tasks.md||" || echo "")
 
 if [ -z "$ACTIVE_FEATURE" ]; then
   exit 0
 fi
 
-FEATURE_DIR="$PROJECT_ROOT/specs/$ACTIVE_FEATURE"
+FEATURE_DIR="$WORKFLOW_DATA_DIR/$ACTIVE_FEATURE"
 TASKS_FILE="$FEATURE_DIR/tasks.md"
 
 # Count task statuses

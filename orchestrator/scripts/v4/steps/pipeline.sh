@@ -8,7 +8,7 @@
 # ============================================================
 run_pipeline_steps_2_to_7() {
   local feature_name="$1"
-  local pipeline_log="$PROJECT_ROOT/specs/.workflow-log"
+  local pipeline_log="$WORKFLOW_DATA_DIR/.workflow-log"
   local step_start
   local complexity
 
@@ -53,7 +53,7 @@ run_pipeline_steps_2_to_7() {
       echo "  ❌ 自动修复回路失败，流水线终止"
       progress_step_fail "$feature_name" 4 "" "自动修复失败"
       agent_notify \
-        "需求 '$feature_name' 的自动修复回路也失败了，无法自动解决测试问题，流水线已终止。详见 specs/$feature_name/test-report.md。" \
+        "需求 '$feature_name' 的自动修复回路也失败了，无法自动解决测试问题，流水线已终止。详见 $WORKFLOW_DATA_DIR/$feature_name/test-report.md。" \
         "需要我帮你分析失败原因吗？还是你来人工修复后执行 /resume $feature_name 继续？" \
         "$feature_name"
       log "STEP_4_FAILED: $(($(date +%s) - step_start))s" "$pipeline_log"
@@ -101,7 +101,7 @@ run_pipeline_steps_2_to_7() {
 run_full_pipeline() {
   local input="$1"
   local is_hotfix="${2:-false}"
-  local pipeline_log="$PROJECT_ROOT/specs/.workflow-log"
+  local pipeline_log="$WORKFLOW_DATA_DIR/.workflow-log"
   local step_start
 
   # Step 0：环境准备 + 知识加载
@@ -127,7 +127,7 @@ run_full_pipeline() {
     return 0
   fi
   # 再次校验三文档是否落盘（防止 step1 内部校验被绕过或 detect_feature_name 误判）
-  local spec_dir="$PROJECT_ROOT/specs/$feature_name"
+  local spec_dir="$WORKFLOW_DATA_DIR/$feature_name"
   if [ ! -s "$spec_dir/requirements.md" ] || [ ! -s "$spec_dir/design.md" ] || [ ! -s "$spec_dir/tasks.md" ]; then
     echo "❌ 流水线终止：spec 三文档未完整生成"
     echo "  requirements.md: $([ -s "$spec_dir/requirements.md" ] && echo "OK" || echo "MISSING/EMPTY")"

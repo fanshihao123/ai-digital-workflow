@@ -24,9 +24,9 @@ if [ -n "$CHANGED_FILES" ]; then
 fi
 
 # Update active workflow log if exists
-ACTIVE_FEATURE=$(ls -t specs/*/tasks.md 2>/dev/null | head -1 | sed 's|specs/||;s|/tasks.md||')
+ACTIVE_FEATURE=$(ls -t "$WORKFLOW_DATA_DIR"/*/tasks.md 2>/dev/null | head -1 | sed "s|$WORKFLOW_DATA_DIR/||;s|/tasks.md||")
 if [ -n "$ACTIVE_FEATURE" ]; then
-  echo "[$(date +%H:%M:%S)] [$EXIT_STATUS] $TOOL_INPUT" >> "specs/$ACTIVE_FEATURE/.workflow-log"
+  echo "[$(date +%H:%M:%S)] [$EXIT_STATUS] $TOOL_INPUT" >> "$WORKFLOW_DATA_DIR/$ACTIVE_FEATURE/.workflow-log"
 fi
 
 exit 0
