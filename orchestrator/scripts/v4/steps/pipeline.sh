@@ -25,13 +25,22 @@ run_pipeline_steps_2_to_7() {
   progress_step_done "$feature_name" 2 "" "complexity: $complexity"
   log "STEP_2_DONE: $(($(date +%s) - step_start))s" "$pipeline_log"
 
+  # 关键节点：开发完成，推送当前进度快照
+  local _progress_snapshot
+  _progress_snapshot=$(progress_render "$feature_name" 2>/dev/null || true)
+  [ -n "$_progress_snapshot" ] && feishu_notify "📊 **$feature_name** 开发完成，当前进度:\n$_progress_snapshot" "$feature_name"
+
   # Step 3：code-reviewer（两轮审查）
   step_start=$(date +%s)
   log "STEP_3_START: 代码审查 ($feature_name)" "$pipeline_log"
   progress_step_start "$feature_name" 3
   step3_review "$feature_name" || {
     echo "  ❌ 审查阶段被阻断"
-    progress_step_fail "$feature_name" 3 "" "审查阻断"
+    local review_ctx=""
+    if [ -f "$WORKFLOW_DATA_DIR/$feature_name/review-report.md" ]; then
+      review_ctx=$(grep -E "CRITICAL|FAIL|ERROR" "$WORKFLOW_DATA_DIR/$feature_name/review-report.md" 2>/dev/null | head -5)
+    fi
+    progress_step_fail "$feature_name" 3 "" "审查阻断${review_ctx:+: $review_ctx}"
     log "STEP_3_BLOCKED: $(($(date +%s) - step_start))s" "$pipeline_log"
     return 1
   }
@@ -51,9 +60,13 @@ run_pipeline_steps_2_to_7() {
       "$feature_name"
     step4_fix_and_retry "$feature_name" || {
       echo "  ❌ 自动修复回路失败，流水线终止"
-      progress_step_fail "$feature_name" 4 "" "自动修复失败"
+      local test_ctx=""
+      if [ -f "$WORKFLOW_DATA_DIR/$feature_name/test-report.md" ]; then
+        test_ctx=$(grep -E "FAIL|Error|✗|✘|failed" "$WORKFLOW_DATA_DIR/$feature_name/test-report.md" 2>/dev/null | head -8)
+      fi
+      progress_step_fail "$feature_name" 4 "" "自动修复失败${test_ctx:+: $test_ctx}"
       agent_notify \
-        "需求 '$feature_name' 的自动修复回路也失败了，无法自动解决测试问题，流水线已终止。详见 $WORKFLOW_DATA_DIR/$feature_name/test-report.md。" \
+        "需求 '$feature_name' 的自动修复回路也失败了，无法自动解决测试问题，流水线已终止。\n\n失败摘要:\n${test_ctx:-详见 $WORKFLOW_DATA_DIR/$feature_name/test-report.md}" \
         "需要我帮你分析失败原因吗？还是你来人工修复后执行 /resume $feature_name 继续？" \
         "$feature_name"
       log "STEP_4_FAILED: $(($(date +%s) - step_start))s" "$pipeline_log"
@@ -64,6 +77,10 @@ run_pipeline_steps_2_to_7() {
   }
   progress_step_done "$feature_name" 4
   log "STEP_4_DONE: $(($(date +%s) - step_start))s" "$pipeline_log"
+
+  # 关键节点：测试通过，推送当前进度快照
+  _progress_snapshot=$(progress_render "$feature_name" 2>/dev/null || true)
+  [ -n "$_progress_snapshot" ] && feishu_notify "📊 **$feature_name** 测试通过，当前进度:\n$_progress_snapshot" "$feature_name"
 
   # Step 5：doc-syncer（文档同步 + 迭代归档）
   step_start=$(date +%s)

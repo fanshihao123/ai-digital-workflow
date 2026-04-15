@@ -21,4 +21,11 @@ step0_prepare() {
 
   # C. 加载公司 skills（如配置）
   load_company_skills
+
+  # D. 检查全局 LESSONS.md（跨 feature 经验沉淀）
+  if [ -f "$WORKFLOW_DATA_DIR/LESSONS.md" ]; then
+    local lessons_entries
+    lessons_entries=$(grep -c "^## " "$WORKFLOW_DATA_DIR/LESSONS.md" 2>/dev/null || echo 0)
+    echo "  已加载全局 LESSONS.md ($lessons_entries 条经验记录)"
+  fi
 }

@@ -63,7 +63,7 @@ chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/v4/commands/"*.sh 2>/dev/nu
 chmod +x "$PROJECT_ROOT/.claude/extensions/"*/scripts/*.sh 2>/dev/null || true
 
 echo "-- 安装 slash commands..."
-for c in start-workflow hotfix review test status resume pause restart; do
+for c in start-workflow hotfix review test status resume pause restart init-knowledge; do
   cp "$SRC/commands/$c.md" "$PROJECT_ROOT/.claude/commands/"
   echo "  [ok] $c"
 done
@@ -153,7 +153,9 @@ echo "    human-gate         配置 FEISHU_APPROVAL_CODE"
 echo "    jira-sync          配置 JIRA_BASE_URL + JIRA_TOKEN"
 echo ""
 echo "  下一步："
-echo "    1. 编辑 .claude/*.md 填入项目信息"
+echo "    1. cd $PROJECT_ROOT && claude /init-knowledge"
+echo "       ↑ AI 自动分析项目，生成 CLAUDE.md + rules/（推荐）"
+echo "       或手动编辑 .claude/*.md 填入项目信息"
 echo "    2. vim .env.ai-digital-workflow  # 直接编辑，无需复制"
 echo "    3. 测试: opencli claude --permission-mode bypassPermissions -p '/start-workflow 添加用户登录'"
 echo "=================================================="

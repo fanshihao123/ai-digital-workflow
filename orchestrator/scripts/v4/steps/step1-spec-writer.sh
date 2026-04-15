@@ -19,6 +19,7 @@ step1_spec_writer() {
 
   # Stage 1a: Claude 仅生成 requirements.md（澄清前不生成 design/tasks，避免重复浪费）
   echo "  [Stage 1a] Claude 生成 requirements.md..." >&2
+  feishu_notify "⏳ **[1/8] 需求分析** Stage 1a: 生成 requirements.md..." ""
   model=$(select_model "low")
 
   # ── Stage 1a Figma 预检：输入中已含 Figma URL 时，不要让 Claude 将其标为 [UNCERTAIN] ──
@@ -156,6 +157,7 @@ step1_spec_writer() {
 
   # Stage 2: OpenAI Codex 审查
   echo "  [Stage 2] OpenAI Codex 审查..." >&2
+  progress_substep "$feature_name" 1 "Stage 1b: design.md + tasks.md 生成完毕 (${task_count} tasks)" "done"
   feishu_notify "✅ **[Stage 1b]** design.md + tasks.md 生成完毕 (${task_count} 个任务, complexity: $complexity)\n⏳ **[Stage 2]** 开始 Codex spec 审查..." "$feature_name"
   if command -v codex &> /dev/null; then
     codex exec --full-auto "
@@ -186,6 +188,7 @@ step1_spec_writer() {
   fi
 
   # Stage 3: Claude 复审 + 定稿
+  progress_substep "$feature_name" 1 "Stage 2: Codex spec 审查完毕" "done"
   feishu_notify "✅ **[Stage 2]** Codex 审查完毕\n⏳ **[Stage 3]** Claude 复审 + 定稿..." "$feature_name"
   echo "  [Stage 3] Claude 复审 + 定稿..." >&2
   if [ -f "$WORKFLOW_DATA_DIR/$feature_name/spec-review.md" ]; then
@@ -294,8 +297,15 @@ step1_restart_with_diff() {
   notify "🔄 需求有变更，开始增量更新 spec: $feature_name"
   log "PIPELINE_RESTART_WITH_DIFF: $feature_name" "$pipeline_log"
 
-  # Stage 1a'：模型润色规范化用户手改的 requirements.md
-  echo "  [Stage 1a'] 规范化 requirements.md..." >&2
+  # Stage 1a'：模型润色规范化用户手改的 requirements.md + 结构化变更标记
+  echo "  [Stage 1a'] 规范化 requirements.md（含版本追踪）..." >&2
+
+  # 读取当前版本号，自动递增
+  local current_version
+  current_version=$(grep -oE 'v[0-9]+' "$req_file" 2>/dev/null | sort -V | tail -1 | tr -d 'v')
+  current_version="${current_version:-1}"
+  local next_version=$((current_version + 1))
+
   opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
     Read $PROJECT_ROOT/.claude/skills/spec-writer/SKILL.md
     Read $PROJECT_ROOT/.claude/CLAUDE.md
@@ -315,6 +325,14 @@ step1_restart_with_diff() {
     - 补全格式：标准 Markdown 结构、验收标准、边界说明
     - 对仍不确定的需求项打上 [UNCERTAIN] 标记并写入开放问题 section
     - 不要生成或修改 design.md、tasks.md
+
+    【结构化变更追踪】（v$current_version → v$next_version）：
+    - 在文件顶部的版本表中追加一行：| $(date +%Y-%m-%d) | v$next_version | {变更摘要} |
+    - 在功能需求中标记变更：
+      - 新增的需求项追加 \`[v$next_version 新增]\`
+      - 修改的需求项追加 \`[v$next_version 修改: {变更说明}]\`
+      - 删除的需求项用删除线并追加 \`[v$next_version 删除]\`
+    - 验收标准同理追加版本标记
   " >&2
 
   # 检测 [UNCERTAIN]
@@ -355,13 +373,29 @@ step1_restart_with_diff() {
     任务（Stage 1b'）：
     - 以最小粒度更新 design.md 和 tasks.md，仅修改与 diff 相关的部分
     - 未受 diff 影响的设计决策和任务条目保持原样，不要重写
-    - 新增需求 → 追加对应 design 章节和 task 条目
-    - 删除需求 → 移除对应内容
-    - 修改需求 → 就地更新受影响部分
+
+    【design.md 变更追踪】：
+    - 在设计版本表中追加一行：| $(date +%Y-%m-%d) | v$next_version | {变更摘要} |
+    - 新增需求 → 追加对应 design 章节
+    - 删除需求 → 移除对应章节
+    - 修改需求 → 就地更新受影响部分，标注变更原因
+
+    【tasks.md 结构化变更标记】：
+    - 在任务版本表中追加一行：| $(date +%Y-%m-%d) | v$next_version | {变更摘要} |
+    - 已完成的任务 [x] 保持不动，绝不修改
+    - 因变更作废的未完成任务：用删除线 + \`[DROPPED v$next_version]\` 标记
+    - 受变更影响的未完成任务：追加 \`[CHANGED v$next_version: {变更说明}]\` 并更新描述
+    - 新增的任务：标记 \`[NEW v$next_version]\`
+    示例：
+      - [x] T-001: 创建登录页面 ~30min                        ← 已完成，不动
+      - [ ] T-003: 实现手机号登录 ~30min \`[CHANGED v2: 去掉倒计时]\`
+      - [ ] ~~T-004: 短信过期逻辑~~ \`[DROPPED v2]\`
+      - [ ] T-008: [NEW] 微信 OAuth 回调处理 ~30min \`[NEW v2]\`
+
     - 更新两个文件 status 标记为 reviewed
   " >&2
 
-  log "STEP_1_DONE: $feature_name (restart with diff)" "$pipeline_log"
-  notify "✅ 增量 spec 更新完成: $feature_name"
+  log "STEP_1_DONE: $feature_name (restart with diff, v$current_version -> v$next_version)" "$pipeline_log"
+  notify "✅ 增量 spec 更新完成: $feature_name (v$current_version → v$next_version)"
   return 0
 }

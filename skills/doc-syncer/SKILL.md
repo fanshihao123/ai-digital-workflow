@@ -47,7 +47,18 @@ cp $WORKFLOW_DATA_DIR/{feature-name}/requirements.md "$ARCHIVE/"
 cp $WORKFLOW_DATA_DIR/{feature-name}/design.md "$ARCHIVE/"
 cp $WORKFLOW_DATA_DIR/{feature-name}/tasks.md "$ARCHIVE/"
 cp $WORKFLOW_DATA_DIR/{feature-name}/test-report.md "$ARCHIVE/" 2>/dev/null || true
+cp $WORKFLOW_DATA_DIR/{feature-name}/LESSONS.md "$ARCHIVE/" 2>/dev/null || true
 ```
+
+### Step 3.5：汇总 LESSONS.md 到全局
+
+如果本次 feature 产生了 `$WORKFLOW_DATA_DIR/{feature-name}/LESSONS.md`，
+将其中有跨 feature 价值的条目（架构决策、通用踩坑、环境依赖）追加到全局
+`$WORKFLOW_DATA_DIR/LESSONS.md`。
+
+- 去重：如果全局 LESSONS.md 已有相同条目则跳过
+- 保留 feature 级 LESSONS.md 不动（归档用）
+- 全局 LESSONS.md 供后续 feature 开发时加载参考
 
 ### Step 4：更新迭代记录
 

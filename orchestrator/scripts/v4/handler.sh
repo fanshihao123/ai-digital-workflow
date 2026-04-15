@@ -82,6 +82,13 @@ cleanup() {
     local error_msg="流水线异常退出（exit code: $exit_code）"
     [ -n "$feature" ] && error_msg="需求 '$feature' 的${error_msg}，可执行 /resume $feature 从断点继续。"
 
+    # 附带最近日志摘要帮助排查
+    local recent_log=""
+    if [ -d "$WORKFLOW_DATA_DIR" ] && [ -f "$WORKFLOW_DATA_DIR/.workflow-log" ]; then
+      recent_log=$(tail -10 "$WORKFLOW_DATA_DIR/.workflow-log" 2>/dev/null || true)
+    fi
+    [ -n "$recent_log" ] && error_msg="${error_msg}\n\n最近日志:\n\`\`\`\n${recent_log}\n\`\`\`"
+
     # 写日志（即使模块未加载也尝试）
     if [ -d "$WORKFLOW_DATA_DIR" ]; then
       echo "[$(date '+%H:%M:%S')] PIPELINE_FAILED: ${feature:-unknown} (exit code: $exit_code)" \

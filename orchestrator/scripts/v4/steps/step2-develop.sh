@@ -113,16 +113,33 @@ step2_sequential() {
     local -a task_reasons=()
     local -a task_failed_blocks=()
     local task_log_file=""
+    local ag_total_tasks ag_done_tasks=0
+    ag_total_tasks=$(echo "$task_nums" | wc -w | tr -d ' ')
 
     for task_num in $task_nums; do
+      ag_done_tasks=$((ag_done_tasks + 1))
+      local ag_task_title
+      ag_task_title=$(grep "^### Task $task_num" "$tasks_file" 2>/dev/null | head -1 | sed "s/^### Task $task_num[：:]*//")
+      feishu_notify "⏳ **[2/8] UI 还原** Task $ag_done_tasks/$ag_total_tasks: $ag_task_title" "$feature_name"
+      progress_substep "$feature_name" 2 "UI Task $task_num: $ag_task_title" "running"
+      local ag_task_start_ts
+      ag_task_start_ts=$(date +%s)
+
       if step2a_restore_task "$feature_name" "$task_num" "$base_url"; then
         succeeded_tasks="$succeeded_tasks $task_num"
+        local ag_task_elapsed=$(($(date +%s) - ag_task_start_ts))
+        local ag_task_dur
+        ag_task_dur=$(_format_duration "$ag_task_elapsed" 2>/dev/null || echo "${ag_task_elapsed}s")
+        feishu_notify "✅ **[2/8] UI 还原** Task $ag_done_tasks/$ag_total_tasks 完成 ($ag_task_dur): $ag_task_title" "$feature_name"
+        progress_substep "$feature_name" 2 "UI Task $task_num: $ag_task_title ($ag_task_dur)" "done"
       else
         failed_tasks="$failed_tasks $task_num"
         task_reasons+=("Task${task_num}:${UI_RESTORE_LAST_REASON:-UNKNOWN}")
         task_failed_blocks+=("Task${task_num}:${UI_RESTORE_LAST_FAILED_BLOCKS:-}")
         task_log_file="${UI_RESTORE_LAST_LOG:-}"
         echo "  [Step 2a] Task $task_num 还原失败: reason=${UI_RESTORE_LAST_REASON:-UNKNOWN} blocks=${UI_RESTORE_LAST_FAILED_BLOCKS:-none}" >&2
+        feishu_notify "❌ **[2/8] UI 还原** Task $ag_done_tasks/$ag_total_tasks 失败: $ag_task_title (${UI_RESTORE_LAST_REASON:-UNKNOWN})" "$feature_name"
+        progress_substep "$feature_name" 2 "UI Task $task_num: $ag_task_title" "fail"
       fi
     done
 
@@ -290,7 +307,9 @@ $error_issues
   fi
 
   # ── Step 2b: claude-code 任务（业务逻辑，依赖 2a 产出）──
-  echo "  [Step 2b] 执行 claude-code 任务..." >&2
+  # 借鉴 laoyuan N7 上下文管理：逐 task 执行，每完成一个 task 后重新加载 specs，
+  # 避免长会话 context window 膨胀导致后期 task 质量下降。
+  echo "  [Step 2b] 执行 claude-code 任务（逐 task + context reload）..." >&2
   notify "💻 Step 2b: 开始业务逻辑开发" "$feature_name"
 
   # 读取 antigravity 产物清单，告知 Step 2b 哪些文件已由 UI 还原生成
@@ -303,19 +322,111 @@ $ag_files
 如需修改这些文件（如添加业务逻辑），仅做增量修改，不要重写 UI 结构。"
   fi
 
-  opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
-    Read $tasks_file
-    Read $PROJECT_ROOT/.claude/CLAUDE.md
-    Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
-    Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
-    $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant company skills from $PROJECT_ROOT/.claude/company-skills/")
+  # 提取所有 claude-code 任务编号（排除 antigravity）
+  local cc_task_nums
+  cc_task_nums=$(awk '
+    /^### Task [0-9]+/ { task_num = $0; gsub(/[^0-9]/, "", task_num); current_task = task_num; is_ag = 0 }
+    /agent: antigravity/ { is_ag = 1 }
+    /^### Task [0-9]+/ && !is_ag && current_task != "" { }
+    END {}
+  ' "$tasks_file" 2>/dev/null || true)
+  # 更可靠的方式：找所有 Task 编号，排除 antigravity 的
+  local all_task_nums ag_task_nums_list
+  all_task_nums=$(grep -o "^### Task [0-9]*" "$tasks_file" 2>/dev/null | grep -o "[0-9]*" | sort -n)
+  ag_task_nums_list=$(grep -n "agent: antigravity" "$tasks_file" 2>/dev/null \
+    | while read -r line; do
+        local lineno="${line%%:*}"
+        awk "NR<=$lineno" "$tasks_file" \
+          | grep "^### Task [0-9]" | tail -1 \
+          | grep -o "[0-9]*" | head -1
+      done | sort -un)
 
-    ${ag_artifact_hint}
+  cc_task_nums=""
+  for tn in $all_task_nums; do
+    local is_ag=false
+    for ag_tn in $ag_task_nums_list; do
+      [ "$tn" = "$ag_tn" ] && is_ag=true && break
+    done
+    if [ "$is_ag" = "false" ]; then
+      # 跳过已完成的任务（断点恢复）
+      if _extract_task_body "$tasks_file" "$tn" 2>/dev/null | grep -q "^- 状态：done"; then
+        echo "  [Step 2b] Task $tn 已完成，跳过" >&2
+        continue
+      fi
+      cc_task_nums="$cc_task_nums $tn"
+    fi
+  done
 
-    Execute all tasks marked 'agent: claude-code' (or with no agent tag) in tasks.md.
-    Skip tasks marked 'agent: antigravity' — they are already completed in Step 2a. Do NOT re-implement their UI output.
-    Follow task dependencies. Mark each task as done after completion.
-  " >&2
+  local total_cc_tasks done_cc_tasks=0 failed_cc_tasks=""
+  total_cc_tasks=$(echo "$cc_task_nums" | wc -w | tr -d ' ')
+  echo "  [Step 2b] 共 $total_cc_tasks 个 claude-code 任务待执行" >&2
+
+  # LESSONS.md 路径（跨 task 积累经验）
+  local lessons_file="$WORKFLOW_DATA_DIR/$feature_name/LESSONS.md"
+
+  for task_num in $cc_task_nums; do
+    done_cc_tasks=$((done_cc_tasks + 1))
+    local task_body
+    task_body=$(_extract_task_body "$tasks_file" "$task_num" 2>/dev/null)
+    local task_title
+    task_title=$(grep "^### Task $task_num" "$tasks_file" 2>/dev/null | head -1 | sed "s/^### Task $task_num[：:]*//")
+
+    echo "  [Step 2b] Task $task_num ($done_cc_tasks/$total_cc_tasks): $task_title" >&2
+    feishu_notify "⏳ **[2/8] 开发** Task $done_cc_tasks/$total_cc_tasks: $task_title" "$feature_name"
+    progress_substep "$feature_name" 2 "Task $task_num: $task_title" "running"
+    local task_start_ts
+    task_start_ts=$(date +%s)
+
+    # 每个 task 独立会话执行（清洁 context）
+    local task_exit_code=0
+    opencli claude --print --permission-mode bypassPermissions --model "$model" -p "
+      Read $tasks_file
+      Read $PROJECT_ROOT/.claude/CLAUDE.md
+      Read $PROJECT_ROOT/.claude/ARCHITECTURE.md
+      Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
+      $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant company skills from $PROJECT_ROOT/.claude/company-skills/")
+      $([ -f "$lessons_file" ] && echo "Read $lessons_file — 参考之前任务的经验教训，避免重复踩坑")
+
+      ${ag_artifact_hint}
+
+      Execute ONLY Task $task_num in tasks.md.
+      Task details:
+      $task_body
+
+      Rules:
+      - Skip tasks marked 'agent: antigravity' — already completed in Step 2a. Do NOT re-implement their UI output.
+      - Follow task dependencies — if this task depends on others, read their output files first.
+      - Mark Task $task_num as done (状态：done) in tasks.md after completion.
+      - After completing the task, append a brief entry to $lessons_file if you encountered anything noteworthy:
+        architecture decisions, gotchas, workarounds, cross-task impacts, or environment quirks.
+        Format: ## $(date +%Y-%m-%d) — Task $task_num: {title}
+        Skip if nothing worth recording.
+    " >&2 || task_exit_code=$?
+
+    local task_elapsed=$(($(date +%s) - task_start_ts))
+    local task_duration
+    task_duration=$(_format_duration "$task_elapsed" 2>/dev/null || echo "${task_elapsed}s")
+
+    if [ "$task_exit_code" -ne 0 ]; then
+      echo "  [Step 2b] ❌ Task $task_num 失败 (exit: $task_exit_code, $done_cc_tasks/$total_cc_tasks, ${task_duration})" >&2
+      feishu_notify "❌ **[2/8] 开发** Task $done_cc_tasks/$total_cc_tasks 失败 ($task_duration): $task_title (exit: $task_exit_code)" "$feature_name"
+      progress_substep "$feature_name" 2 "Task $task_num: $task_title ($task_duration)" "fail"
+      failed_cc_tasks="$failed_cc_tasks $task_num"
+    else
+      echo "  [Step 2b] ✅ Task $task_num 完成 ($done_cc_tasks/$total_cc_tasks, ${task_duration})" >&2
+      feishu_notify "✅ **[2/8] 开发** Task $done_cc_tasks/$total_cc_tasks 完成 ($task_duration): $task_title" "$feature_name"
+      progress_substep "$feature_name" 2 "Task $task_num: $task_title ($task_duration)" "done"
+    fi
+  done
+
+  # 汇总失败任务
+  if [ -n "$failed_cc_tasks" ]; then
+    local fail_count
+    fail_count=$(echo "$failed_cc_tasks" | wc -w | tr -d ' ')
+    echo "  [Step 2b] ⚠️ $fail_count/$total_cc_tasks 个任务失败: Task$failed_cc_tasks" >&2
+    feishu_notify "⚠️ **[2/8] 开发汇总**: $fail_count/$total_cc_tasks 个任务失败 (Task$failed_cc_tasks)\n后续审查和测试阶段可能发现更多问题" "$feature_name"
+    log "STEP_2B_PARTIAL_FAIL: $fail_count/$total_cc_tasks tasks failed (Task$failed_cc_tasks)" "$WORKFLOW_DATA_DIR/.workflow-log"
+  fi
 
   format_changed_files_after_dev
 }

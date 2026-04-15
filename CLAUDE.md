@@ -159,6 +159,7 @@ openclaw agents bind ai-react --channel feishu --peer ou_xxxxxxxxxx
 | `/review [feature]` | 单独触发代码审查（Step 3） | 审查失败修完代码后重跑；或只想审查不跑完整流程 |
 | `/test [feature]` | 单独触发测试（Step 4） | 测试失败修完后重跑 |
 | `/status` | 查看 Git log、活跃 specs、扩展开关状态 | 不知道跑到哪了；确认扩展是否生效 |
+| `/init-knowledge` | AI 分析项目，智能生成 CLAUDE.md + rules/ | 项目初始化后替代手动填写空壳文件 |
 
 ### 命令选择决策树
 
@@ -295,6 +296,63 @@ SCORE < 8 → 人工确认节点（agent_notify 发飞书附截图）
 ### 测试标准
 
 覆盖率阈值：Statements 80%、Branches 75%、Functions 80%。**特性范围测试与全仓库历史债务分离**——新特性测试必须通过，历史债务不阻塞新功能。
+
+## Recent Improvements (2026-04-15 v2)
+
+### 流水线可观测性增强（去黑盒化）
+
+**1. Step 2 逐 task 飞书通知**
+- Step 2b（claude-code 任务）每个 task 开始/完成时推送飞书通知，含 task 序号、标题、耗时
+- Step 2a（antigravity UI 还原）同样逐 task 通知，失败时附带具体原因（`UI_RESTORE_LAST_REASON`）
+- 所有 task 进度同步写入 `progress_substep`，`/status` 可查看子步骤明细
+
+**2. 关键节点 Progress 快照推送**
+- Step 2 开发完成后、Step 4 测试通过后，自动将当前 progress.md 进度表推送到飞书
+- 用户无需 `/status` 主动查询，关键里程碑自动获知
+
+**3. 失败通知自动附带错误上下文**
+- 流水线异常退出（handler.sh cleanup）：通知附带最近 10 行 workflow-log
+- Step 3 审查阻断：通知附带 review-report.md 中的 CRITICAL/FAIL 摘要
+- Step 4 测试失败：通知附带 test-report.md 中的失败行摘要
+
+**4. Step 2b task 失败捕获**
+- `opencli claude` 调用加入退出码捕获（`|| task_exit_code=$?`），不再静默跳过
+- 单 task 失败不停止流水线（后续 task 可能不依赖它），继续执行剩余任务
+- 全部 task 完成后汇总：`⚠️ 开发汇总: 2/5 个任务失败 (Task 3 5)`，同时写入 workflow-log
+
+**5. Step 1 子进度通知补全**
+- Stage 1a 开始时发飞书通知
+- Stage 1b/Stage 2/Stage 3 各阶段完成时写入 `progress_substep`
+
+## Recent Improvements (2026-04-15)
+
+### 四项架构借鉴（参考 laoyuan 项目）
+
+**1. 上下文管理（Step 2b 逐 task 执行 + context reload）**
+- Step 2b 从"一次性全部任务"改为**逐 task 独立会话执行**
+- 每个 task 启动新的 `opencli claude` 会话，自动重新加载 specs + CLAUDE.md + rules + LESSONS.md
+- 避免长会话 context window 膨胀导致后期 task 质量下降
+- 已完成的 task（`状态：done`）自动跳过，支持断点恢复
+
+**2. LESSONS.md 知识沉淀**
+- **Feature 级**：每个 task 完成后，AI 自动追加踩坑记录到 `$WORKFLOW_DATA_DIR/{feature}/LESSONS.md`
+- **全局级**：doc-sync（Step 5）将跨 feature 价值的条目汇总到 `$WORKFLOW_DATA_DIR/LESSONS.md`
+- **自动加载**：Step 2b 每个 task 执行时读取 LESSONS.md，避免重复踩坑
+- **归档保留**：doc-sync 归档时包含 feature 级 LESSONS.md
+
+**3. 需求变更结构化标记（/restart 增强）**
+- requirements.md 自动递增版本号（v1 → v2 → v3...），追加版本表行
+- 功能需求标记 `[vN 新增]`、`[vN 修改: 说明]`、`~~删除~~ [vN 删除]`
+- tasks.md 使用 `[NEW vN]`、`[CHANGED vN: 说明]`、`[DROPPED vN]` 标记
+- 已完成任务 `[x]` 绝不修改，只标记未完成的受影响任务
+- design.md 同步追加版本表
+
+**4. `/init-knowledge` 智能项目初始化**
+- 新增 `/init-knowledge` slash command，AI 分析项目后生成有内容的知识库文件
+- 自动检测技术栈（package.json / tsconfig / lint 配置等）
+- 生成 CLAUDE.md（≤150 行）+ ARCHITECTURE.md + 按需 rules/ 文件
+- `init-project.sh` 安装完成后提示用户运行 `/init-knowledge`
+- 已有实质内容的文件优先合并，不覆盖
 
 ## Recent Improvements (2026-04-02)
 
