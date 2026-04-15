@@ -140,7 +140,7 @@ run_full_pipeline() {
   log "STEP_1_DONE: $feature_name ($(($(date +%s) - step_start))s)" "$pipeline_log"
 
   # 初始化进度面板（Step 0 和 1 已完成，从此处开始追踪）
-  progress_init "$feature_name" 7 "$input"
+  progress_init "$feature_name" 8 "$input"
   progress_step_done "$feature_name" 0 "" "环境就绪"
   progress_step_done "$feature_name" 1 "" "specs 三文档已生成"
 
