@@ -121,9 +121,8 @@ Step 7: 完成汇总通知
 
 ```
 orchestrator/scripts/
-├── feishu-handler.sh          ← 版本路由入口（v3/v4 切换）
-├── lib/common.sh              ← 公共函数库（两个版本共用）
-├── v3/handler.sh              ← 单体版备份（可通过 HANDLER_VERSION=v3 切回）
+├── feishu-handler.sh          ← 入口
+├── lib/common.sh              ← 公共函数库
 └── v4/
     ├── handler.sh             ← v4 入口：初始化 → source 模块 → 命令路由
     ├── lib/                   ← 12 个工具模块

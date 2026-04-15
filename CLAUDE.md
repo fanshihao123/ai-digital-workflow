@@ -45,24 +45,20 @@ Step 6: 部署(可选) + 飞书通知
 
 ### 核心目录职责
 
-- `orchestrator/` — 编排引擎入口。`feishu-handler.sh` 是版本路由入口，按 `HANDLER_VERSION` 分发到 v3（单体）或 v4（模块化）
-- `orchestrator/scripts/v4/` — **v4 模块化编排器**（默认），拆分为 lib/steps/commands 三层
-- `orchestrator/scripts/v3/` — v3 单体版备份（`handler.sh` 2899 行，可通过 `HANDLER_VERSION=v3` 切回）
+- `orchestrator/` — 编排引擎入口。`feishu-handler.sh` 是入口，路由到模块化编排器
+- `orchestrator/scripts/v4/` — 模块化编排器，拆分为 lib/steps/commands 三层
 - `skills/` — 4 个核心 Skill（必选），每个 Skill 一个 `SKILL.md` 定义其行为
 - `extensions/` — 5 个可插拔扩展，通过 `.env` 开关激活，不改代码只改配置
 - `commands/` — 9 个飞书斜杠命令定义（含 `/answer`、`/resume`、`/pause`、`/restart`）
 
 ### v4 模块化架构
 
-`feishu-handler.sh` 根据 `HANDLER_VERSION`（默认 `v4`）路由到对应版本：
-
 ```
 orchestrator/scripts/
-├── feishu-handler.sh          ← 版本路由入口（v3/v4 切换）
-├── lib/common.sh              ← 公共函数库（两个版本共用）
-├── v3/handler.sh              ← 单体版备份（2899 行）
+├── feishu-handler.sh          ← 入口
+├── lib/common.sh              ← 公共函数库
 └── v4/
-    ├── handler.sh             ← v4 入口：初始化 → source 模块 → 命令路由
+    ├── handler.sh             ← 模块化入口：初始化 → source 模块 → 命令路由
     ├── lib/                   ← 11 个工具模块
     │   ├── state.sh           ← 统一状态机引擎（state.json 替代散落的 paused/awaiting json）
     │   ├── utils.sh           ← select_model, detect_feature_name, get_complexity 等
@@ -91,9 +87,7 @@ orchestrator/scripts/
         ├── review.sh, test.sh, status.sh, deploy.sh, rollback.sh
 ```
 
-**版本切换**：在 `.env.ai-digital-workflow` 中设置 `HANDLER_VERSION=v3` 或 `v4`（默认 v4）
-
-**v4 状态机**（`lib/state.sh`）：统一 `specs/{feature}/state.json` 替代散落的 `paused.json`、`awaiting-clarification.json`、`awaiting-spec-review.json`，支持状态转移验证和 v3→v4 自动迁移
+**状态机**（`lib/state.sh`）：统一 `specs/{feature}/state.json` 管理所有 feature 状态，支持状态转移验证
 
 ### 工作流管家 Agent
 
@@ -308,17 +302,6 @@ SCORE < 8 → 人工确认节点（agent_notify 发飞书附截图）
 - **state.sh 关联数组替换**: `declare -A STATE_TRANSITIONS` 改为 `_state_transition_lookup()` 函数（`case` 语句），修复 macOS 默认 bash 3.2 下 `unbound variable` 崩溃
 - **cleanup trap 三级降级通知**: handler.sh 的错误处理增加 `type` 检查，即使模块加载阶段崩溃（source 失败），也能逐级降级发出飞书通知：`agent_notify` → `feishu_notify` → 直接调用 `openclaw message send` / `curl webhook`
 - **pipeline.sh 通知修复**: spec-writer 失败时 `notify` 调用改为 `feishu_notify`，补全 feature_name 参数，确保通知能发出
-
-## Recent Improvements (2026-04-01)
-
-### feishu-handler.sh v4 模块化拆分
-- **版本路由入口**: `feishu-handler.sh` 改为根据 `HANDLER_VERSION` 环境变量分发到 v3（单体）或 v4（模块化），默认 v4
-- **v3 备份**: 原 2899 行单体脚本完整保留在 `orchestrator/scripts/v3/handler.sh`，可随时切回
-- **v4 三层架构**: lib（11 个工具模块）→ steps（9 个流水线阶段）→ commands（12 个命令处理器），共 33 个文件
-- **统一状态机引擎**: 新增 `v4/lib/state.sh`，用 `specs/{feature}/state.json` 统一管理所有 feature 状态，替代散落的 `paused.json` / `awaiting-clarification.json` / `awaiting-spec-review.json`
-- **状态转移表**: 定义合法的 `from_status:command → target_status` 映射，非法转移自动拒绝并给出建议命令
-- **v3→v4 迁移兼容**: `state_migrate_from_v3()` 自动从旧版状态文件推断当前状态并生成 `state.json`
-- **零逻辑变更**: 所有业务逻辑从 v3 原样提取，64 个函数全部保留，仅做文件拆分
 
 ## Recent Improvements (2026-03-31 v2)
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# AI数字员工24小时可编排工作流 v3 — 项目初始化
+# AI数字员工24小时可编排工作流 — 项目初始化
 # 4 核心 skill + 5 可插拔扩展
 # 用法: bash init-project.sh /path/to/your/project
 
@@ -7,7 +7,7 @@ set -euo pipefail
 PROJECT_ROOT="${1:-.}"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "== AI数字员工24小时可编排工作流 v3 — 初始化: $PROJECT_ROOT =="
+echo "== AI数字员工24小时可编排工作流 — 初始化: $PROJECT_ROOT =="
 echo "=================================================="
 
 mkdir -p "$PROJECT_ROOT/.claude"/{skills,extensions,orchestrator,commands,logs}
@@ -61,7 +61,6 @@ chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/v4/"*.sh 2>/dev/null || tru
 chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/v4/lib/"*.sh 2>/dev/null || true
 chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/v4/steps/"*.sh 2>/dev/null || true
 chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/v4/commands/"*.sh 2>/dev/null || true
-chmod +x "$PROJECT_ROOT/.claude/orchestrator/scripts/v3/"*.sh 2>/dev/null || true
 chmod +x "$PROJECT_ROOT/.claude/extensions/"*/scripts/*.sh 2>/dev/null || true
 
 echo "-- 安装 slash commands..."
@@ -83,7 +82,7 @@ done
 if [ ! -f "$PROJECT_ROOT/.env.ai-digital-workflow" ]; then
   cat > "$PROJECT_ROOT/.env.ai-digital-workflow" << 'EOF'
 # ==========================================
-# AI数字员工24小时可编排工作流 v3 配置
+# AI数字员工24小时可编排工作流 配置
 # ==========================================
 
 # --- openclaw ---
