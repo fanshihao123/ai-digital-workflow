@@ -86,7 +86,7 @@ if [ ! -f "$PROJECT_ROOT/.env.ai-digital-workflow" ]; then
 
 # --- 工作流数据目录 ---
 # specs/状态/日志等产物存放位置（不放在项目仓库内，避免污染）
-# 默认：~/.ai-workflow/data/{项目名}
+# 默认：~/ai-workflow/data/{项目名}
 # WORKFLOW_DATA_DIR=
 
 # --- openclaw ---

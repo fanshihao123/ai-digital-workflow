@@ -339,7 +339,7 @@ $ag_files
         awk "NR<=$lineno" "$tasks_file" \
           | grep "^### Task [0-9]" | tail -1 \
           | grep -o "[0-9]*" | head -1
-      done | sort -un)
+      done | sort -un || true)
 
   cc_task_nums=""
   for tn in $all_task_nums; do

@@ -171,7 +171,7 @@ orchestrator/scripts/
 ├── SECURITY.md                 ← 安全规范
 ├── CODING_GUIDELINES.md        ← 编码规范
 └── hooks.json                  ← Claude Code hooks
-~/.ai-workflow/data/{项目名}/     ← WORKFLOW_DATA_DIR（项目外，不污染仓库）
+~/ai-workflow/data/{项目名}/     ← WORKFLOW_DATA_DIR（项目外，不污染仓库）
 ├── {需求名称}/                    ← 当前需求的 spec 文件
 │   ├── requirements.md
 │   ├── design.md

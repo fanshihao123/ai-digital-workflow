@@ -325,7 +325,7 @@ jira-sync（如启用）→ sync-jira.sh {key} deployed
 ├── ARCHITECTURE.md
 ├── SECURITY.md
 └── CODING_GUIDELINES.md
-~/.ai-workflow/data/{项目名}/        ← WORKFLOW_DATA_DIR（项目外，不污染仓库）
+~/ai-workflow/data/{项目名}/        ← WORKFLOW_DATA_DIR（项目外，不污染仓库）
 ├── {需求名称}/                      ← 当前功能的 spec 文件
 └── archive/                         ← 已完成迭代的归档
 ```
