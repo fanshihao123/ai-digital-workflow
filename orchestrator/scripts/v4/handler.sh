@@ -21,7 +21,7 @@ validate_config || echo "⚠️ 部分配置无效，请检查 .env" >&2
 # ── 工作流数据目录（specs/状态/日志等产物，不污染项目仓库） ──
 if [ -z "${WORKFLOW_DATA_DIR:-}" ]; then
   _project_name=$(basename "$PROJECT_ROOT")
-  WORKFLOW_DATA_DIR="$HOME/ai-workflow/data/$_project_name"
+  WORKFLOW_DATA_DIR="$HOME/Desktop/ai-workflow-data/$_project_name"
 fi
 export WORKFLOW_DATA_DIR
 

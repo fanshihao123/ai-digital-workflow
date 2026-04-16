@@ -61,6 +61,7 @@ cmd_fix_spec() {
     Read $spec_dir/design.md
     Read $spec_dir/tasks.md
 
+    【重要】输出目录为 $spec_dir/（即 SKILL.md 中 \$WORKFLOW_DATA_DIR/$feature_name 的实际路径）。请将修改后的文件写回该目录。
     Codex spec 审查报告中有严重问题（CRITICAL_ISSUES >= 3），用户提供了以下修改指导：
     $guidance
 
@@ -112,7 +113,7 @@ cmd_fix_spec() {
       对每项给出 PASS / ISSUE 判定。
       输出格式: DIMENSION: Rx  VERDICT: PASS|ISSUE  DETAIL: ...  SUGGESTION: ...
       最后输出: OVERALL: PASS|NEEDS_REVISION  CRITICAL_ISSUES: {数量}
-      将结果写入 $spec_dir/spec-review.md
+      将结果写入 $spec_dir/spec-review.md（不要写到其他位置）
     " >&2
   fi
 
@@ -126,6 +127,7 @@ cmd_fix_spec() {
       Read $spec_dir/design.md
       Read $spec_dir/tasks.md
 
+      【重要】输出目录为 $spec_dir/（即 SKILL.md 中 \$WORKFLOW_DATA_DIR/$feature_name 的实际路径）。请将修改后的文件写回该目录。
       Execute spec-writer Stage 3: 根据 Codex 审查报告复审并定稿。
       - PASS 的维度不做修改
       - ISSUE 的维度按建议修改（如不同意则在 spec-review.md 中标注理由）

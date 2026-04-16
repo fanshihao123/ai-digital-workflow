@@ -120,7 +120,7 @@ step2_sequential() {
       ag_done_tasks=$((ag_done_tasks + 1))
       local ag_task_title
       ag_task_title=$(grep "^### Task $task_num" "$tasks_file" 2>/dev/null | head -1 | sed "s/^### Task $task_num[：:]*//")
-      feishu_notify "⏳ **[2/8] UI 还原** Task $ag_done_tasks/$ag_total_tasks: $ag_task_title" "$feature_name"
+      feishu_notify "⏳ **[3/8] UI 还原** Task $ag_done_tasks/$ag_total_tasks: $ag_task_title" "$feature_name"
       progress_substep "$feature_name" 2 "UI Task $task_num: $ag_task_title" "running"
       local ag_task_start_ts
       ag_task_start_ts=$(date +%s)
@@ -130,7 +130,7 @@ step2_sequential() {
         local ag_task_elapsed=$(($(date +%s) - ag_task_start_ts))
         local ag_task_dur
         ag_task_dur=$(_format_duration "$ag_task_elapsed" 2>/dev/null || echo "${ag_task_elapsed}s")
-        feishu_notify "✅ **[2/8] UI 还原** Task $ag_done_tasks/$ag_total_tasks 完成 ($ag_task_dur): $ag_task_title" "$feature_name"
+        feishu_notify "✅ **[3/8] UI 还原** Task $ag_done_tasks/$ag_total_tasks 完成 ($ag_task_dur): $ag_task_title" "$feature_name"
         progress_substep "$feature_name" 2 "UI Task $task_num: $ag_task_title ($ag_task_dur)" "done"
       else
         failed_tasks="$failed_tasks $task_num"
@@ -138,7 +138,7 @@ step2_sequential() {
         task_failed_blocks+=("Task${task_num}:${UI_RESTORE_LAST_FAILED_BLOCKS:-}")
         task_log_file="${UI_RESTORE_LAST_LOG:-}"
         echo "  [Step 2a] Task $task_num 还原失败: reason=${UI_RESTORE_LAST_REASON:-UNKNOWN} blocks=${UI_RESTORE_LAST_FAILED_BLOCKS:-none}" >&2
-        feishu_notify "❌ **[2/8] UI 还原** Task $ag_done_tasks/$ag_total_tasks 失败: $ag_task_title (${UI_RESTORE_LAST_REASON:-UNKNOWN})" "$feature_name"
+        feishu_notify "❌ **[3/8] UI 还原** Task $ag_done_tasks/$ag_total_tasks 失败: $ag_task_title (${UI_RESTORE_LAST_REASON:-UNKNOWN})" "$feature_name"
         progress_substep "$feature_name" 2 "UI Task $task_num: $ag_task_title" "fail"
       fi
     done
@@ -372,7 +372,7 @@ $ag_files
     task_title=$(grep "^### Task $task_num" "$tasks_file" 2>/dev/null | head -1 | sed "s/^### Task $task_num[：:]*//")
 
     echo "  [Step 2b] Task $task_num ($done_cc_tasks/$total_cc_tasks): $task_title" >&2
-    feishu_notify "⏳ **[2/8] 开发** Task $done_cc_tasks/$total_cc_tasks: $task_title" "$feature_name"
+    feishu_notify "⏳ **[3/8] 开发** Task $done_cc_tasks/$total_cc_tasks: $task_title" "$feature_name"
     progress_substep "$feature_name" 2 "Task $task_num: $task_title" "running"
     local task_start_ts
     task_start_ts=$(date +%s)
@@ -409,12 +409,12 @@ $ag_files
 
     if [ "$task_exit_code" -ne 0 ]; then
       echo "  [Step 2b] ❌ Task $task_num 失败 (exit: $task_exit_code, $done_cc_tasks/$total_cc_tasks, ${task_duration})" >&2
-      feishu_notify "❌ **[2/8] 开发** Task $done_cc_tasks/$total_cc_tasks 失败 ($task_duration): $task_title (exit: $task_exit_code)" "$feature_name"
+      feishu_notify "❌ **[3/8] 开发** Task $done_cc_tasks/$total_cc_tasks 失败 ($task_duration): $task_title (exit: $task_exit_code)" "$feature_name"
       progress_substep "$feature_name" 2 "Task $task_num: $task_title ($task_duration)" "fail"
       failed_cc_tasks="$failed_cc_tasks $task_num"
     else
       echo "  [Step 2b] ✅ Task $task_num 完成 ($done_cc_tasks/$total_cc_tasks, ${task_duration})" >&2
-      feishu_notify "✅ **[2/8] 开发** Task $done_cc_tasks/$total_cc_tasks 完成 ($task_duration): $task_title" "$feature_name"
+      feishu_notify "✅ **[3/8] 开发** Task $done_cc_tasks/$total_cc_tasks 完成 ($task_duration): $task_title" "$feature_name"
       progress_substep "$feature_name" 2 "Task $task_num: $task_title ($task_duration)" "done"
     fi
   done
@@ -424,7 +424,7 @@ $ag_files
     local fail_count
     fail_count=$(echo "$failed_cc_tasks" | wc -w | tr -d ' ')
     echo "  [Step 2b] ⚠️ $fail_count/$total_cc_tasks 个任务失败: Task$failed_cc_tasks" >&2
-    feishu_notify "⚠️ **[2/8] 开发汇总**: $fail_count/$total_cc_tasks 个任务失败 (Task$failed_cc_tasks)\n后续审查和测试阶段可能发现更多问题" "$feature_name"
+    feishu_notify "⚠️ **[3/8] 开发汇总**: $fail_count/$total_cc_tasks 个任务失败 (Task$failed_cc_tasks)\n后续审查和测试阶段可能发现更多问题" "$feature_name"
     log "STEP_2B_PARTIAL_FAIL: $fail_count/$total_cc_tasks tasks failed (Task$failed_cc_tasks)" "$WORKFLOW_DATA_DIR/.workflow-log"
   fi
 

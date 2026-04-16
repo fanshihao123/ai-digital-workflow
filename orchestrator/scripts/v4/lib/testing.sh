@@ -250,11 +250,23 @@ run_local_test() {
     fi
   elif has_package_script "test"; then
     has_feature_scope_runner="false"
-    feature_command="npm test -- --runInBand"
-    set +e
-    feature_output=$(npm test -- --runInBand 2>&1)
-    feature_exit=$?
-    set -e
+    # 检测底层 test runner：只有 Jest 才支持 --runInBand，node --test / vitest / mocha 等不认此参数
+    local test_script_value=""
+    test_script_value=$(node -e "const p=require('$PROJECT_ROOT/package.json'); console.log(p.scripts&&p.scripts.test||'')" 2>/dev/null || true)
+    if printf '%s' "$test_script_value" | grep -qE '(^|[[:space:]/])jest([[:space:]]|$)' \
+      || [ -n "$jest_config" ]; then
+      feature_command="npm test -- --runInBand"
+      set +e
+      feature_output=$(npm test -- --runInBand 2>&1)
+      feature_exit=$?
+      set -e
+    else
+      feature_command="npm test"
+      set +e
+      feature_output=$(npm test 2>&1)
+      feature_exit=$?
+      set -e
+    fi
     if [ "$feature_exit" -eq 0 ] \
       && [ "$lint_status" != "FAIL" ] \
       && [ "$build_status" != "FAIL" ]; then
@@ -284,7 +296,8 @@ EOF
 
   if has_package_script "test"; then
     repo_command="npm test"
-    if [ "$feature_command" = "npm test -- --runInBand" ]; then
+    if [ "$feature_command" = "npm test -- --runInBand" ] || [ "$feature_command" = "npm test" ]; then
+      # feature 阶段已经跑过 npm test（带或不带 --runInBand），复用结果
       repo_output="$feature_output"
       repo_exit=$feature_exit
     else

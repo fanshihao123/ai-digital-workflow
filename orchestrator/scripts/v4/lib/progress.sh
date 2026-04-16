@@ -180,7 +180,7 @@ progress_init() {
 
   _progress_json_init "$feature" "$total_steps" "$input"
 
-  # 写 progress.md 初始内容
+  # 写 progress.md 初始内容（序号 1-based，面向用户）
   cat > "$file" << EOF
 # Pipeline Progress: $feature
 
@@ -190,14 +190,14 @@ progress_init() {
 
 | # | 阶段 | 状态 | 耗时 | 备注 |
 |---|------|------|------|------|
-| 0 | 🔧 环境准备 | ⬜ pending | - | |
-| 1 | 📝 需求分析 | ⬜ pending | - | |
-| 2 | 💻 开发执行 | ⬜ pending | - | |
-| 3 | 🔍 代码审查 | ⬜ pending | - | |
-| 4 | 🧪 测试 | ⬜ pending | - | |
-| 5 | 📚 文档同步 | ⬜ pending | - | |
-| 6 | 🚀 部署 | ⬜ pending | - | |
-| 7 | 📢 完成通知 | ⬜ pending | - | |
+| 1 | 🔧 环境准备 | ⬜ pending | - | |
+| 2 | 📝 需求分析 | ⬜ pending | - | |
+| 3 | 💻 开发执行 | ⬜ pending | - | |
+| 4 | 🔍 代码审查 | ⬜ pending | - | |
+| 5 | 🧪 测试 | ⬜ pending | - | |
+| 6 | 📚 文档同步 | ⬜ pending | - | |
+| 7 | 🚀 部署 | ⬜ pending | - | |
+| 8 | 📢 完成通知 | ⬜ pending | - | |
 EOF
 
   # 飞书推送启动通知
@@ -219,8 +219,9 @@ progress_step_start() {
   local file
   file=$(_progress_file "$feature")
   if [ -f "$file" ]; then
-    local pattern="| $step_num |"
-    local replacement="| $step_num | $icon $step_name | ⏳ running | ... | |"
+    local display_num=$((step_num + 1))
+    local pattern="| $display_num |"
+    local replacement="| $display_num | $icon $step_name | ⏳ running | ... | |"
     # 用 awk 精确替换匹配行
     awk -v pat="$pattern" -v rep="$replacement" \
       'index($0, pat) == 1 { print rep; next } { print }' \
@@ -264,10 +265,11 @@ progress_step_done() {
   local file
   file=$(_progress_file "$feature")
   if [ -f "$file" ]; then
-    local pattern="| $step_num |"
+    local display_num=$((step_num + 1))
+    local pattern="| $display_num |"
     local detail_short
     detail_short=$(echo "$detail" | head -1 | cut -c1-40)
-    local replacement="| $step_num | $icon $step_name | ✅ done | $duration_str | $detail_short |"
+    local replacement="| $display_num | $icon $step_name | ✅ done | $duration_str | $detail_short |"
     awk -v pat="$pattern" -v rep="$replacement" \
       'index($0, pat) == 1 { print rep; next } { print }' \
       "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
@@ -297,8 +299,9 @@ progress_step_skip() {
   local file
   file=$(_progress_file "$feature")
   if [ -f "$file" ]; then
-    local pattern="| $step_num |"
-    local replacement="| $step_num | $icon $step_name | ⏭️ skip | - | $reason |"
+    local display_num=$((step_num + 1))
+    local pattern="| $display_num |"
+    local replacement="| $display_num | $icon $step_name | ⏭️ skip | - | $reason |"
     awk -v pat="$pattern" -v rep="$replacement" \
       'index($0, pat) == 1 { print rep; next } { print }' \
       "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
@@ -335,10 +338,11 @@ progress_step_fail() {
   local file
   file=$(_progress_file "$feature")
   if [ -f "$file" ]; then
-    local pattern="| $step_num |"
+    local display_num=$((step_num + 1))
+    local pattern="| $display_num |"
     local reason_short
     reason_short=$(echo "$reason" | head -1 | cut -c1-40)
-    local replacement="| $step_num | $icon $step_name | ❌ fail | $duration_str | $reason_short |"
+    local replacement="| $display_num | $icon $step_name | ❌ fail | $duration_str | $reason_short |"
     awk -v pat="$pattern" -v rep="$replacement" \
       'index($0, pat) == 1 { print rep; next } { print }' \
       "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
@@ -369,13 +373,30 @@ progress_substep() {
     step_name=$(_step_display_name "$step_num")
     local icon
     icon=$(_step_icon "$step_num")
-    local pattern="| $step_num | $icon $step_name"
+    local display_num=$((step_num + 1))
+    local pattern="| $display_num | $icon $step_name"
+
+    # 从 msg 提取 task 标识（如 "Task 1: xxx" → "Task 1"），用于匹配并替换 running 行
+    local task_id=""
+    case "$msg" in
+      Task\ [0-9]*:*|UI\ Task\ [0-9]*:*)
+        task_id=$(echo "$msg" | grep -o '^\(UI \)\{0,1\}Task [0-9]*' || true)
+        ;;
+    esac
+
+    # 如果是 done/fail 状态且能识别 task_id，先删除同 task 的 running 行
+    if [ -n "$task_id" ] && [ "$status" != "running" ]; then
+      awk -v tid="$task_id" -v running_icon="$(_status_icon running)" \
+        '!(index($0, tid) && index($0, running_icon " running"))' \
+        "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+    fi
+
     # 找到 step 行的下一行，在其前面插入子步骤
-    awk -v pat="$pattern" -v sub="| | \u2514\u2500 $msg | $status_icon $status | | |" \
-      'printed && /^\| [0-9]/ { print sub; printed=0 }
+    awk -v pat="$pattern" -v substep="| | └─ $msg | $status_icon $status | | |" \
+      'printed && /^\| [0-9]/ { print substep; printed=0 }
        { print }
        index($0, pat) { printed=1 }
-       END { if (printed) print sub }' \
+       END { if (printed) print substep }' \
       "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
   fi
 }

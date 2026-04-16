@@ -19,7 +19,7 @@ step1_spec_writer() {
 
   # Stage 1a: Claude 仅生成 requirements.md（澄清前不生成 design/tasks，避免重复浪费）
   echo "  [Stage 1a] Claude 生成 requirements.md..." >&2
-  feishu_notify "⏳ **[1/8] 需求分析** Stage 1a: 生成 requirements.md..." ""
+  feishu_notify "⏳ **[2/8] 需求分析** Stage 1a: 生成 requirements.md..." ""
   model=$(select_model "low")
 
   # ── Stage 1a Figma 预检：输入中已含 Figma URL 时，不要让 Claude 将其标为 [UNCERTAIN] ──
@@ -42,6 +42,7 @@ step1_spec_writer() {
     Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
     $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
     ${stage1a_figma_hint:+$stage1a_figma_hint}
+    【重要】输出目录为 $WORKFLOW_DATA_DIR/（即 SKILL.md 中 \$WORKFLOW_DATA_DIR 的实际路径）。请将 requirements.md 写到 $WORKFLOW_DATA_DIR/{feature-name}/ 下，不要写到项目内的 specs/ 或其他位置。
     Execute spec-writer Stage 1a: generate requirements.md ONLY (do NOT generate design.md or tasks.md yet) for: $input
     Mark all [UNCERTAIN] items as unchecked [ ] in the '开放问题' section of requirements.md.
     $([ "$is_hotfix" = "true" ] && echo "This is a /hotfix — generate minimal requirements.md only, no open questions needed")
@@ -123,6 +124,7 @@ step1_spec_writer() {
     $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
     Read $WORKFLOW_DATA_DIR/$feature_name/requirements.md
     ${figma_hint:+$figma_hint}
+    【重要】输出目录为 $WORKFLOW_DATA_DIR/$feature_name/（即 SKILL.md 中 \$WORKFLOW_DATA_DIR 的实际路径）。请将 design.md 和 tasks.md 写到该目录下。
     Execute spec-writer Stage 1b: generate design.md + tasks.md based on the confirmed requirements.md above.
     $([ "$is_hotfix" = "true" ] && echo "This is a /hotfix — generate tasks.md directly with minimal design")
   " >&2
@@ -200,6 +202,7 @@ step1_spec_writer() {
       Read $WORKFLOW_DATA_DIR/$feature_name/design.md
       Read $WORKFLOW_DATA_DIR/$feature_name/tasks.md
 
+      【重要】输出目录为 $WORKFLOW_DATA_DIR/$feature_name/（即 SKILL.md 中 \$WORKFLOW_DATA_DIR 的实际路径）。请将修改后的文件写回该目录。
       Execute spec-writer Stage 3: 根据 Codex 审查报告复审并定稿。
       - PASS 的维度不做修改
       - ISSUE 的维度按建议修改（如不同意则在 spec-review.md 中标注理由）
@@ -319,6 +322,7 @@ step1_restart_with_diff() {
     $diff_output
     ---DIFF END---
 
+    【重要】输出目录为 $WORKFLOW_DATA_DIR/$feature_name/（即 SKILL.md 中 \$WORKFLOW_DATA_DIR 的实际路径）。
     任务（Stage 1a'）：
     - 仅覆写 $WORKFLOW_DATA_DIR/$feature_name/requirements.md
     - 保留用户的所有意图和新增内容，不做删减
@@ -370,8 +374,9 @@ step1_restart_with_diff() {
     $diff_output
     ---DIFF END---
 
+    【重要】输出目录为 $spec_dir/（即 SKILL.md 中 \$WORKFLOW_DATA_DIR/$feature_name 的实际路径）。
     任务（Stage 1b'）：
-    - 以最小粒度更新 design.md 和 tasks.md，仅修改与 diff 相关的部分
+    - 以最小粒度更新 $spec_dir/design.md 和 $spec_dir/tasks.md，仅修改与 diff 相关的部分
     - 未受 diff 影响的设计决策和任务条目保持原样，不要重写
 
     【design.md 变更追踪】：

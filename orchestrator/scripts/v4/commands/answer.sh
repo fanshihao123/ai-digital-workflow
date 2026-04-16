@@ -45,6 +45,7 @@ cmd_answer_clarification() {
     $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
     Read $WORKFLOW_DATA_DIR/$feature_name/requirements.md
 
+    【重要】输出目录为 $WORKFLOW_DATA_DIR/$feature_name/（即 SKILL.md 中 \$WORKFLOW_DATA_DIR 的实际路径）。
     用户已为开放问题提供澄清，请仅覆写 $WORKFLOW_DATA_DIR/$feature_name/requirements.md：
     原始需求: $original_input
     用户澄清答复: $answers
@@ -83,6 +84,7 @@ cmd_answer_clarification() {
     Read $PROJECT_ROOT/.claude/CODING_GUIDELINES.md
     $([ -d "$PROJECT_ROOT/.claude/company-skills" ] && echo "Read relevant skills from $PROJECT_ROOT/.claude/company-skills/")
     Read $WORKFLOW_DATA_DIR/$feature_name/requirements.md
+    【重要】输出目录为 $WORKFLOW_DATA_DIR/$feature_name/（即 SKILL.md 中 \$WORKFLOW_DATA_DIR 的实际路径）。请将 design.md 和 tasks.md 写到该目录下。
     Execute spec-writer Stage 1b: generate design.md + tasks.md based on the confirmed requirements.md above.
   " >&2
 
@@ -116,6 +118,7 @@ cmd_answer_clarification() {
         Read $WORKFLOW_DATA_DIR/$feature_name/requirements.md
         Read $WORKFLOW_DATA_DIR/$feature_name/design.md
         Read $WORKFLOW_DATA_DIR/$feature_name/tasks.md
+        【重要】输出目录为 $WORKFLOW_DATA_DIR/$feature_name/（即 SKILL.md 中 \$WORKFLOW_DATA_DIR 的实际路径）。请将修改后的文件写回该目录。
         Execute spec-writer Stage 3: 复审定稿，PASS 项不改，ISSUE 项按建议修改，更新文件状态为 reviewed。
       " >&2
 
