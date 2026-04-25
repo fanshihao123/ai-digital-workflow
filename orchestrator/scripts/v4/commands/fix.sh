@@ -1,5 +1,5 @@
 #!/bin/bash
-# fix-spec.sh — /fix-spec command: user provides guidance, Claude auto-fixes spec and re-reviews
+# fix.sh — /fix command (alias: /fix-spec): user provides guidance, Claude auto-fixes spec and re-reviews
 # Sourced by v4/handler.sh; all lib and step modules already loaded
 
 cmd_fix_spec() {
@@ -14,8 +14,8 @@ cmd_fix_spec() {
     feature_name=$(detect_feature_name)
   fi
   if [ -z "$feature_name" ]; then
-    echo "❌ 未找到活跃的需求。用法: /fix-spec {需求名称} {修改指导}"
-    echo "   示例: /fix-spec user-login 1.去掉短信验证 2.用JWT替换session"
+    echo "❌ 未找到活跃的需求。用法: /fix {需求名称} {修改指导}"
+    echo "   示例: /fix user-login 1.去掉短信验证 2.用JWT替换session"
     return 1
   fi
   if ! has_pending_spec_review "$feature_name"; then
@@ -25,7 +25,7 @@ cmd_fix_spec() {
   fi
   if [ -z "$guidance" ]; then
     echo "❌ 请提供修改指导"
-    echo "   示例: /fix-spec $feature_name 1.去掉短信验证 2.用JWT替换session"
+    echo "   示例: /fix $feature_name 1.去掉短信验证 2.用JWT替换session"
     return 1
   fi
 
@@ -150,7 +150,7 @@ cmd_fix_spec() {
     critical_summary=$(grep -i "CRITICAL\|ISSUE" "$spec_dir/spec-review.md" 2>/dev/null | head -20)
     agent_notify \
       "需求 '$feature_name' 修改后重新审查仍有 $new_critical_count 个严重问题。\n\n问题摘要：\n${critical_summary}" \
-      "请告知用户仍有问题，询问进一步修改方向。用户回复后执行：/fix-spec $feature_name {修改指导}" \
+      "请告知用户仍有问题，询问进一步修改方向。用户回复后执行：/fix $feature_name {修改指导}" \
       "$feature_name"
     echo "  ❌ 修改后仍有 $new_critical_count 个 CRITICAL_ISSUES，继续等待指导" >&2
     log "FIX_SPEC_STILL_CRITICAL: $feature_name ($new_critical_count)" "$pipeline_log"

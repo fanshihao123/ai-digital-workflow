@@ -5,7 +5,7 @@ description: >
   飞书消息触发后按 Pipeline 模式执行：spec-writer → Claude Code 开发 →
   code-reviewer (2 rounds) → test-runner → doc-syncer → 通知。
   扩展模块按 .env 配置自动激活/跳过。
-  触发条件：飞书 webhook、/start-workflow、/workflow、/hotfix。
+  触发条件：飞书 webhook、/start、/workflow、/hotfix。
 ---
 
 # 编排器 — 4 核心 + 5 扩展
@@ -13,7 +13,7 @@ description: >
 ## 架构总览
 
 ```
-/start-workflow {url | text}
+/start {url | text}
         |
    ┌────┴────┐
    │ Step 0  │  加载 .claude/ 项目规范 + 公司 skills (侧输入)
@@ -147,7 +147,7 @@ C. 如配置了 COMPANY_SKILLS_GIT → git pull 公司 skills 仓库
                   三个文件 status: reviewed → 进入 Step 2
 ```
 
-**审查策略**：默认所有 `/start-workflow` 任务都必须执行 Stage 2（Codex spec 审查）+ Stage 3（Claude 复审定稿）；只有 `/hotfix` 模式允许跳过完整 spec 审查。
+**审查策略**：默认所有 `/start` 任务都必须执行 Stage 2（Codex spec 审查）+ Stage 3（Claude 复审定稿）；只有 `/hotfix` 模式允许跳过完整 spec 审查。
 
 **审查失败兜底**：3+ CRITICAL_ISSUES 未解决 → 飞书通知人工介入。
 
@@ -286,7 +286,7 @@ jira-sync（如启用）→ sync-jira.sh {key} deployed
 
 | 命令 | 动作 |
 |------|------|
-| `/start-workflow {url\|desc}` | 完整流水线 |
+| `/start {url\|desc}` | 完整流水线 |
 | `/hotfix {desc}` | 跳过设计，直接生成 tasks.md |
 | `/review` | 仅执行 code-reviewer |
 | `/test` | 仅执行 test-runner |

@@ -1,5 +1,5 @@
 #!/bin/bash
-# restart.sh — /restart command: resume from paused state with intelligent requirements diff
+# continue.sh — /continue command (alias: /restart): resume from paused state with intelligent requirements diff
 # Sourced by v4/handler.sh; all lib and step modules already loaded
 
 cmd_restart() {
@@ -10,7 +10,7 @@ cmd_restart() {
     feature_name=$(detect_feature_name)
   fi
   if [ -z "$feature_name" ]; then
-    echo "❌ 未找到活跃的需求。用法: /restart {需求名称}"
+    echo "❌ 未找到活跃的需求。用法: /continue {需求名称}"
     return 1
   fi
   if ! validate_feature_name "$feature_name"; then
@@ -20,14 +20,14 @@ cmd_restart() {
 
   # 优先检查是否有待澄清状态（避免与 paused.json 产生歧义）
   if has_pending_clarification "$feature_name"; then
-    echo "⚠️ '$feature_name' 处于等待澄清状态，请先用 /answer 回复问题后再 /restart"
+    echo "⚠️ '$feature_name' 处于等待澄清状态，请先用 /answer 回复问题后再 /continue"
     return 1
   fi
 
   # 检查是否处于 spec 审查阻断状态（必须用 /fix-spec 恢复）
   if has_pending_spec_review "$feature_name"; then
     echo "⚠️ '$feature_name' 处于 Spec 审查阻断状态（CRITICAL 问题未解决）"
-    echo "   请用 /fix-spec $feature_name {修改指导} 告诉 AI 如何修改"
+    echo "   请用 /fix $feature_name {修改指导} 告诉 AI 如何修改"
     return 1
   fi
 
@@ -82,7 +82,7 @@ cmd_restart() {
   if [ $diff_result -eq 2 ]; then
     # 再次遇到 [UNCERTAIN]，保留 paused.json 等用户 /answer 后再 /restart
     echo "⏸️ 需求变更中仍有未确认问题，已暂停"
-    echo "   请用 /answer $feature_name 回复后，再次执行 /restart $feature_name"
+    echo "   请用 /answer $feature_name 回复后，再次执行 /continue $feature_name"
     return 0
   fi
 

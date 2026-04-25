@@ -4,7 +4,7 @@ description: >
   需求→设计→任务一站式生成。接收 URL 或文字描述，通过 Chrome MCP 抓取页面内容
   或直接解析文字，结合 .claude/ 项目规范和公司 skills 知识库，一次性输出
   requirements.md + design.md + tasks.md 三个文件到 $WORKFLOW_DATA_DIR/{feature-name}/ 目录。
-  触发条件：/start-workflow、/workflow、新需求、Jira URL、飞书消息、
+  触发条件：/start、/workflow、新需求、Jira URL、飞书消息、
   "写 spec"、"生成设计"、"分解任务"。
 ---
 
@@ -16,7 +16,7 @@ description: >
 ## 输入解析
 
 ```
-/start-workflow {url | text description}
+/start {url | text description}
                     |
               URL 还是文字？
              /            \

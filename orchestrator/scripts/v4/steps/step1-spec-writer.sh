@@ -227,7 +227,7 @@ step1_spec_writer() {
         --argjson ls 0 \
         '{feature:$feature,status:"paused",paused_at:$ts,paused_step:$ps,last_done_step:$ls,reason:"spec-review-critical",requirements_snapshot:"requirements.md.snapshot"}' \
         > "$spec_dir/paused.json"
-      # 保存 requirements.md 快照（供 /restart 做 diff 用）
+      # 保存 requirements.md 快照（供 /continue 做 diff 用）
       [ -f "$spec_dir/requirements.md" ] && cp "$spec_dir/requirements.md" "$spec_dir/requirements.md.snapshot"
       log "PIPELINE_PAUSED_BY_SPEC_REVIEW: $feature_name ($critical_count CRITICAL_ISSUES)" "$WORKFLOW_DATA_DIR/.workflow-log"
 
@@ -236,9 +236,9 @@ step1_spec_writer() {
       critical_summary=$(grep -i "CRITICAL\|ISSUE" "$spec_dir/spec-review.md" 2>/dev/null | head -20)
       agent_notify \
         "需求 '$feature_name' 的 Spec 审查发现 $critical_count 个严重问题，流水线已自动暂停。\n\n问题摘要：\n${critical_summary}\n\n详见 $WORKFLOW_DATA_DIR/$feature_name/spec-review.md" \
-        "请向用户展示以上问题，询问修改方向。用户回复后执行：/fix-spec $feature_name {用户的修改指导}" \
+        "请向用户展示以上问题，询问修改方向。用户回复后执行：/fix $feature_name {用户的修改指导}" \
         "$feature_name"
-      echo "  ❌ $critical_count 个 CRITICAL_ISSUES，已自动暂停（/fix-spec 恢复）" >&2
+      echo "  ❌ $critical_count 个 CRITICAL_ISSUES，已自动暂停（/fix 恢复）" >&2
       echo "__PAUSED__"
       return 0
     fi

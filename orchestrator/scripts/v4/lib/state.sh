@@ -8,7 +8,7 @@
 #   idle            → 初始/已完成
 #   running         → 流水线执行中
 #   awaiting-answer → 等待用户澄清 [UNCERTAIN] 问题
-#   awaiting-fix    → 等待用户 /fix-spec 修改指导
+#   awaiting-fix    → 等待用户 /fix 修改指导
 #   paused          → 用户主动 /pause
 #   failed          → 流水线异常终止
 #   done            → 全部完成
@@ -20,7 +20,7 @@
 #   "step": 2,
 #   "substep": "stage-2-codex-review",
 #   "updated_at": "2026-04-01T10:00:00Z",
-#   "resume_command": "/fix-spec",
+#   "resume_command": "/fix",
 #   "context": { ... 各状态的附加数据 }
 # }
 
@@ -48,8 +48,8 @@ _state_transition_lookup() {
 
     # 用户恢复命令
     awaiting-answer:answer) echo "running" ;;
-    awaiting-fix:fix-spec)  echo "running" ;;
-    paused:restart)         echo "running" ;;
+    awaiting-fix:fix-spec|awaiting-fix:fix)  echo "running" ;;
+    paused:restart|paused:continue)         echo "running" ;;
     failed:resume)          echo "running" ;;
 
     # 从暂停态也可以 resume（等同于 restart）
@@ -204,13 +204,13 @@ state_await_answer() {
     ".resume_command = \"/answer\" | .context.questions = $(echo "$questions" | jq -Rs .)"
 }
 
-# 暂停：等待用户 /fix-spec
+# 暂停：等待用户 /fix
 state_await_fix() {
   local feature="$1"
   local critical_count="$2"
   local review_summary="$3"
   state_transition "$feature" "await-fix" \
-    ".resume_command = \"/fix-spec\" | .context.critical_count = $critical_count | .context.review_summary = $(echo "$review_summary" | jq -Rs .)"
+    ".resume_command = \"/fix\" | .context.critical_count = $critical_count | .context.review_summary = $(echo "$review_summary" | jq -Rs .)"
 }
 
 # 用户主动暂停
@@ -219,7 +219,7 @@ state_pause() {
   local step
   step=$(state_field "$feature" "step")
   state_transition "$feature" "pause" \
-    ".resume_command = \"/restart\" | .context.paused_step = ${step:-1}"
+    ".resume_command = \"/continue\" | .context.paused_step = ${step:-1}"
 }
 
 # 标记失败
@@ -258,15 +258,15 @@ _suggest_command() {
     awaiting-answer)
       echo "   请先用 /answer $feature {答复} 回复开放问题" >&2 ;;
     awaiting-fix)
-      echo "   请先用 /fix-spec $feature {修改指导} 解决审查问题" >&2 ;;
+      echo "   请先用 /fix $feature {修改指导} 解决审查问题" >&2 ;;
     paused)
-      echo "   请用 /restart $feature 恢复，或 /resume $feature 从断点继续" >&2 ;;
+      echo "   请用 /continue $feature 恢复，或 /resume $feature 从断点继续" >&2 ;;
     failed)
       echo "   请用 /resume $feature 从断点恢复" >&2 ;;
     running)
       echo "   流水线正在运行中，如需暂停请用 /pause $feature" >&2 ;;
     done)
-      echo "   该需求已完成。如需重新启动，请用 /start-workflow" >&2 ;;
+      echo "   该需求已完成。如需重新启动，请用 /start" >&2 ;;
     *)
       echo "   用 /status 查看当前状态" >&2 ;;
   esac

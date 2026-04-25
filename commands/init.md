@@ -1,14 +1,16 @@
 ---
-description: 分析目标项目，智能生成 .claude/ 知识库文件（CLAUDE.md + rules/）
+description: 分析目标项目，智能生成 .claude/ 知识库文件（别名: /init-knowledge）
 argument-hint: [项目路径，默认当前目录]
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash
 model: sonnet
 ---
 
-# /init-knowledge — 项目知识库智能初始化
+# /init — 项目知识库智能初始化
 
 分析当前项目的技术栈、目录结构、配置文件，自动生成有内容的 `.claude/` 知识库文件。
-替代手动填写空壳文件，借鉴 laoyuan `/yd:init` 的"先分析后生成"理念。
+
+> **设计说明**：`/init` 是纯 Claude Code 侧命令——不走编排器 (`handler.sh`)，没有对应的 `.sh` 实现。
+> Claude Code 直接读取本文件的指令来执行分析和生成。这是有意为之的设计，因为 `/init` 的目标是分析项目并生成知识库文件，不需要走流水线管道。
 
 ## 执行步骤
 
@@ -72,8 +74,8 @@ model: sonnet
 
 ```markdown
 ---
-description: {规则一句话描述}
-globs: {可选，如 "src/web/**"}
+description: { 规则一句话描述 }
+globs: { 可选，如 "src/web/**" }
 ---
 
 # {规则标题}
@@ -83,16 +85,16 @@ globs: {可选，如 "src/web/**"}
 
 **按需生成（只创建与项目相关的）：**
 
-| 文件 | 生成条件 | 内容来源 |
-|------|---------|---------|
-| `coding-style.md` | 始终生成 | eslint/prettier/editorconfig/rustfmt 配置推断 |
-| `testing.md` | 有测试框架 | 测试框架配置 + 现有测试文件模式 |
-| `security.md` | 始终生成 | .gitignore 规则 + 依赖分析 + 常见安全要求 |
-| `git-workflow.md` | 始终生成 | git log 推断 commit 风格 + 分支命名 |
-| `frontend.md` | 有前端代码 | 组件规范、路由约定、状态管理 |
-| `backend-api.md` | 有后端 API | API 设计规范、错误处理、中间件 |
-| `database.md` | 有 migration/ORM | migration 规范、查询约定 |
-| `smart-contract.md` | 有合约代码 | 合约安全、审计清单、部署流程 |
+| 文件                | 生成条件         | 内容来源                                      |
+| ------------------- | ---------------- | --------------------------------------------- |
+| `coding-style.md`   | 始终生成         | eslint/prettier/editorconfig/rustfmt 配置推断 |
+| `testing.md`        | 有测试框架       | 测试框架配置 + 现有测试文件模式               |
+| `security.md`       | 始终生成         | .gitignore 规则 + 依赖分析 + 常见安全要求     |
+| `git-workflow.md`   | 始终生成         | git log 推断 commit 风格 + 分支命名           |
+| `frontend.md`       | 有前端代码       | 组件规范、路由约定、状态管理                  |
+| `backend-api.md`    | 有后端 API       | API 设计规范、错误处理、中间件                |
+| `database.md`       | 有 migration/ORM | migration 规范、查询约定                      |
+| `smart-contract.md` | 有合约代码       | 合约安全、审计清单、部署流程                  |
 
 ### 5. 生成 ARCHITECTURE.md
 

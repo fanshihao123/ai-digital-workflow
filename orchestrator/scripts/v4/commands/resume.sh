@@ -27,11 +27,11 @@ cmd_resume() {
     return 0
   fi
 
-  # 若处于 spec 审查阻断状态，提示用 /fix-spec
+  # 若处于 spec 审查阻断状态，提示用 /fix
   if has_pending_spec_review "$feature_name"; then
     echo "⏸️ '$feature_name' 处于 Spec 审查阻断状态（CRITICAL 问题未解决）"
-    echo "   请用 /fix-spec $feature_name {修改指导} 告诉 AI 如何修改"
-    echo "   示例: /fix-spec $feature_name 去掉短信验证，用JWT替换session"
+    echo "   请用 /fix $feature_name {修改指导} 告诉 AI 如何修改"
+    echo "   示例: /fix $feature_name 去掉短信验证，用JWT替换session"
     return 0
   fi
 

@@ -52,13 +52,13 @@ source "$SCRIPT_DIR/steps/step7-notify.sh"
 source "$SCRIPT_DIR/steps/pipeline.sh"
 
 # commands（斜杠命令）
-source "$SCRIPT_DIR/commands/start-workflow.sh"
+source "$SCRIPT_DIR/commands/start.sh"
 source "$SCRIPT_DIR/commands/hotfix.sh"
 source "$SCRIPT_DIR/commands/pause.sh"
-source "$SCRIPT_DIR/commands/restart.sh"
+source "$SCRIPT_DIR/commands/continue.sh"
 source "$SCRIPT_DIR/commands/resume.sh"
 source "$SCRIPT_DIR/commands/answer.sh"
-source "$SCRIPT_DIR/commands/fix-spec.sh"
+source "$SCRIPT_DIR/commands/fix.sh"
 source "$SCRIPT_DIR/commands/review.sh"
 source "$SCRIPT_DIR/commands/test.sh"
 source "$SCRIPT_DIR/commands/status.sh"
@@ -148,7 +148,7 @@ if [[ "$MSG_TEXT" == /* ]]; then
   [ "$ARGS" = "$COMMAND" ] && ARGS=""
 
   case "$COMMAND" in
-    /workflow|/start-workflow)
+    /start|/workflow|/start-workflow)
       echo "Starting full workflow pipeline..."
       cmd_start_workflow "$ARGS"
       ;;
@@ -173,13 +173,13 @@ if [[ "$MSG_TEXT" == /* ]]; then
     /answer)
       cmd_answer_clarification "$ARGS"
       ;;
-    /fix-spec)
+    /fix|/fix-spec)
       cmd_fix_spec "$ARGS"
       ;;
     /pause)
       cmd_pause "$ARGS"
       ;;
-    /restart)
+    /continue|/restart)
       cmd_restart "$ARGS"
       ;;
     /resume)
@@ -190,7 +190,7 @@ if [[ "$MSG_TEXT" == /* ]]; then
       ;;
     *)
       echo "Unknown command: $COMMAND"
-      echo "Available: /workflow /hotfix /review /test /answer /fix-spec /pause /restart /resume /deploy /rollback /status"
+      echo "Available: /start /hotfix /review /test /answer /fix /pause /continue /resume /deploy /rollback /status"
       ;;
   esac
 else

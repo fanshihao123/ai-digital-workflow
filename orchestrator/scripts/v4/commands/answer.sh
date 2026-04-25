@@ -142,9 +142,9 @@ cmd_answer_clarification() {
         critical_summary=$(grep -i "CRITICAL\|ISSUE" "$spec_dir/spec-review.md" 2>/dev/null | head -20)
         agent_notify \
           "需求 '$feature_name' 澄清后审查仍有 $critical_count 个严重问题，流水线已自动暂停。\n\n问题摘要：\n${critical_summary}" \
-          "请向用户展示以上问题，询问修改方向。用户回复后执行：/fix-spec $feature_name {修改指导}" \
+          "请向用户展示以上问题，询问修改方向。用户回复后执行：/fix $feature_name {修改指导}" \
           "$feature_name"
-        echo "  ❌ 澄清后仍有 $critical_count 个 CRITICAL_ISSUES，已自动暂停（/fix-spec 恢复）" >&2
+        echo "  ❌ 澄清后仍有 $critical_count 个 CRITICAL_ISSUES，已自动暂停（/fix 恢复）" >&2
         return 0
       fi
     fi

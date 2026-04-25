@@ -18,10 +18,10 @@ bash init-project.sh /path/to/your/project
 vim .env.ai-digital-workflow
 
 # 本地触发完整流水线
-opencli claude --permission-mode bypassPermissions -p '/start-workflow 添加用户注册页面'
+opencli claude --permission-mode bypassPermissions -p '/start 添加用户注册页面'
 
 # 飞书触发
-@龙虾 /start-workflow 添加用户注册页面
+@龙虾 /start 添加用户注册页面
 ```
 
 ## Architecture
@@ -49,7 +49,7 @@ Step 6: 部署(可选) + 飞书通知
 - `orchestrator/scripts/v4/` — 模块化编排器，拆分为 lib/steps/commands 三层
 - `skills/` — 4 个核心 Skill（必选），每个 Skill 一个 `SKILL.md` 定义其行为
 - `extensions/` — 5 个可插拔扩展，通过 `.env` 开关激活，不改代码只改配置
-- `commands/` — 9 个飞书斜杠命令定义（含 `/answer`、`/resume`、`/pause`、`/restart`）
+- `commands/` — 飞书斜杠命令定义（含 `/answer`、`/resume`、`/pause`、`/continue`）
 
 ### v4 模块化架构
 
@@ -82,8 +82,8 @@ orchestrator/scripts/
     │   ├── step7-notify.sh    ← 完成通知
     │   └── pipeline.sh        ← run_pipeline_steps_2_to_7, run_full_pipeline
     └── commands/              ← 12 个斜杠命令处理器
-        ├── start-workflow.sh, hotfix.sh, pause.sh, restart.sh
-        ├── resume.sh, answer.sh, fix-spec.sh
+        ├── start.sh, hotfix.sh, pause.sh, continue.sh
+        ├── resume.sh, answer.sh, fix.sh
         ├── review.sh, test.sh, status.sh, deploy.sh, rollback.sh
 ```
 
@@ -95,7 +95,7 @@ orchestrator/scripts/
 
 **核心能力：**
 - **状态感知**：每次收到消息先读 `workflow-log`、`paused.json`、`awaiting-clarification.json`，判断当前状态
-- **意图识别**：把自然语言翻译成正确命令（"先停一下" → `/pause`，"改好了" → `/restart`）
+- **意图识别**：把自然语言翻译成正确命令（"先停一下" → `/pause`，"改好了" → `/continue`）
 - **主动发起对话**：工作流关键节点自动触发，Agent 主动问用户问题，等回复后继续执行
 
 **关键节点 Agent 主动介入：**
@@ -103,7 +103,7 @@ orchestrator/scripts/
 | 节点 | Agent 问什么 | 用户回复后执行 |
 |------|------------|-------------|
 | `[UNCERTAIN]` 开放问题 | 逐一列出问题 | `/answer` |
-| Spec 审查 CRITICAL >= 3 | 展示问题摘要，询问修改方向 | `/fix-spec`（Claude 自动修改 + 重新审查，支持多轮） |
+| Spec 审查 CRITICAL >= 3 | 展示问题摘要，询问修改方向 | `/fix`（Claude 自动修改 + 重新审查，支持多轮） |
 | 测试失败进修复回路 | 告知正在自动修复 | 无需操作 |
 | 自动修复也失败 | 帮你分析还是人工修？ | `/resume` |
 | 流水线异常崩溃 | 帮你排查还是直接继续？ | `/resume` |
@@ -149,29 +149,29 @@ openclaw agents bind ai-react --channel feishu --peer ou_xxxxxxxxxx
 
 | 命令 | 用途 | 典型场景 |
 |------|------|---------|
-| `/start-workflow {需求}` | 启动完整流水线 | 新功能、正常需求 |
+| `/start {需求}` | 启动完整流水线 | 新功能、正常需求 |
 | `/hotfix {描述}` | 紧急修复，跳过 spec 审查和开放问题检测 | 线上 bug，不想等完整流水线 |
 | `/pause [feature]` | 主动暂停，保存断点和 requirements.md 快照 | 需求有变化，想改完再继续 |
-| `/restart [feature] [变更描述]` | 从 `/pause` 恢复，自动 diff 需求，最小粒度更新 | 改完需求后继续；不改则直接从断点继续 |
+| `/continue [feature] [变更描述]` | 从 `/pause` 继续，自动 diff 需求，最小粒度更新 | 改完需求后继续；不改则直接从断点继续 |
 | `/resume [feature]` | 从崩溃/意外中断恢复，读日志找断点继续 | 网络抖动、进程被杀、手动 Ctrl+C |
 | `/answer {feature} {答复}` | 回复 `[UNCERTAIN]` 开放问题，恢复被暂停的流水线 | Step 1 检测到不确定项时自动触发暂停 |
-| `/fix-spec {feature} {修改指导}` | 回复 Spec 审查严重问题，Claude 自动修改三文档并重新审查 | Codex 审查 CRITICAL >= 3 自动暂停后 |
+| `/fix {feature} {修改指导}` | 回复 Spec 审查严重问题，Claude 自动修改三文档并重新审查 | Codex 审查 CRITICAL >= 3 自动暂停后 |
 | `/review [feature]` | 单独触发代码审查（Step 3） | 审查失败修完代码后重跑；或只想审查不跑完整流程 |
 | `/test [feature]` | 单独触发测试（Step 4） | 测试失败修完后重跑 |
 | `/status` | 查看 Git log、活跃 specs、扩展开关状态 | 不知道跑到哪了；确认扩展是否生效 |
-| `/init-knowledge` | AI 分析项目，智能生成 CLAUDE.md + rules/ | 项目初始化后替代手动填写空壳文件 |
+| `/init` | AI 分析项目，智能生成 CLAUDE.md + rules/ | 项目初始化后替代手动填写空壳文件 |
 
 ### 命令选择决策树
 
 ```
 有新需求？
-  └── /start-workflow
+  └── /start
 
 线上 bug 紧急修？
   └── /hotfix
 
 工作流跑着，需求要改？
-  └── /pause → 改 requirements.md → /restart
+  └── /pause → 改 requirements.md → /continue
 
 工作流意外中断（崩溃/网络/Ctrl+C）？
   └── /resume
@@ -180,7 +180,7 @@ openclaw agents bind ai-react --channel feishu --peer ou_xxxxxxxxxx
   └── /answer
 
 收到 Spec 审查严重问题通知？
-  └── /fix-spec（告诉 AI 修改方向，自动修复 + 重新审查）
+  └── /fix（告诉 AI 修改方向，自动修复 + 重新审查）
 
 只想重跑审查或测试？
   └── /review 或 /test
@@ -297,6 +297,33 @@ SCORE < 8 → 人工确认节点（agent_notify 发飞书附截图）
 
 覆盖率阈值：Statements 80%、Branches 75%、Functions 80%。**特性范围测试与全仓库历史债务分离**——新特性测试必须通过，历史债务不阻塞新功能。
 
+## Recent Improvements (2026-04-25)
+
+### 命令命名简化 + 缺失命令补齐
+
+**4 个命令改名**（旧名保留为兼容别名，用户无感迁移）：
+
+| 旧命令 | → 新命令 | 改名理由 | 兼容别名 |
+|--------|----------|---------|---------|
+| `/start-workflow` | `/start` | `workflow` 冗余，在工作流系统里不需要强调 | `/start-workflow`, `/workflow` |
+| `/restart` | `/continue` | `restart` 暗示"重新开始"，实际是"暂停后继续" | `/restart` |
+| `/fix-spec` | `/fix` | 用户不需要知道 `spec` 内部术语 | `/fix-spec` |
+| `/init-knowledge` | `/init` | `knowledge` 是内部术语，`/init` 足够清晰 | `/init-knowledge` |
+
+**3 个缺失命令定义补齐**（之前只有 `.sh` 实现无 `.md` 定义，Claude Code 无法识别为斜杠命令）：
+- 新增 `commands/fix.md`（原 `/fix-spec` 从未有 `.md`）
+- 新增 `commands/deploy.md`
+- 新增 `commands/rollback.md`
+
+**涉及文件**：
+- `commands/` — 新建 `start.md`、`continue.md`、`init.md`、`fix.md`、`deploy.md`、`rollback.md`，删除旧 `.md`
+- `v4/commands/` — 新建 `start.sh`、`continue.sh`、`fix.sh`，删除旧 `.sh`，所有用户提示信息更新
+- `v4/handler.sh` — 路由 case 新名为主、旧名为别名
+- `v4/lib/state.sh` — 状态转移和提示信息兼容新旧命令
+- `pause.sh`、`resume.sh`、`answer.sh`、`step1-spec-writer.sh` — 用户可见提示文案全部更新
+- `init-project.sh` — 安装新命令文件
+- `CLAUDE.md`、`README.md`、`orchestrator/SKILL.md`、`spec-writer/SKILL.md` — 文档同步
+
 ## Recent Improvements (2026-04-15 v2)
 
 ### 流水线可观测性增强（去黑盒化）
@@ -340,18 +367,18 @@ SCORE < 8 → 人工确认节点（agent_notify 发飞书附截图）
 - **自动加载**：Step 2b 每个 task 执行时读取 LESSONS.md，避免重复踩坑
 - **归档保留**：doc-sync 归档时包含 feature 级 LESSONS.md
 
-**3. 需求变更结构化标记（/restart 增强）**
+**3. 需求变更结构化标记（/continue 增强）**
 - requirements.md 自动递增版本号（v1 → v2 → v3...），追加版本表行
 - 功能需求标记 `[vN 新增]`、`[vN 修改: 说明]`、`~~删除~~ [vN 删除]`
 - tasks.md 使用 `[NEW vN]`、`[CHANGED vN: 说明]`、`[DROPPED vN]` 标记
 - 已完成任务 `[x]` 绝不修改，只标记未完成的受影响任务
 - design.md 同步追加版本表
 
-**4. `/init-knowledge` 智能项目初始化**
-- 新增 `/init-knowledge` slash command，AI 分析项目后生成有内容的知识库文件
+**4. `/init` 智能项目初始化**
+- 新增 `/init` slash command（别名 `/init-knowledge`），AI 分析项目后生成有内容的知识库文件
 - 自动检测技术栈（package.json / tsconfig / lint 配置等）
 - 生成 CLAUDE.md（≤150 行）+ ARCHITECTURE.md + 按需 rules/ 文件
-- `init-project.sh` 安装完成后提示用户运行 `/init-knowledge`
+- `init-project.sh` 安装完成后提示用户运行 `/init`
 - 已有实质内容的文件优先合并，不覆盖
 
 ## Recent Improvements (2026-04-02)
@@ -363,26 +390,26 @@ SCORE < 8 → 人工确认节点（agent_notify 发飞书附截图）
 
 ## Recent Improvements (2026-03-31 v2)
 
-### Spec 审查阻断自动化（`/fix-spec` 命令）
+### Spec 审查阻断自动化（`/fix` 命令）
 - **自动保存阻断状态**: CRITICAL >= 3 时自动写入 `paused.json` + `awaiting-spec-review.json`，不再需要用户手动 `/pause`
-- **`/fix-spec` 命令**: 用户在飞书用自然语言描述修改方向，Claude 自动根据 `spec-review.md` + 用户指导修改三文档，然后重新走 Codex 审查
-- **支持多轮修复**: 若修改后仍不通过，再次通知用户，继续 `/fix-spec` 直到通过
+- **`/fix` 命令**: 用户在飞书用自然语言描述修改方向，Claude 自动根据 `spec-review.md` + 用户指导修改三文档，然后重新走 Codex 审查
+- **支持多轮修复**: 若修改后仍不通过，再次通知用户，继续 `/fix` 直到通过
 - **通过后自动继续**: 审查通过后自动清理状态、继续 Steps 2-7，无需手动操作
-- **统一阻断检查**: `/answer` 澄清后的 Codex 审查路径也加入了 CRITICAL >= 3 阻断 + `/fix-spec` 恢复机制
+- **统一阻断检查**: `/answer` 澄清后的 Codex 审查路径也加入了 CRITICAL >= 3 阻断 + `/fix` 恢复机制
 - **飞书通知优化**: 阻断时发送 CRITICAL 问题摘要，Agent 引导用户回复修改方向
 
 ### Spec 审查阻断安全性修复
-- **`/restart` 安全门**: 新增 `has_pending_spec_review()` 检查，阻止用户通过 `/restart` 绕过 CRITICAL 审查阻断，引导使用 `/fix-spec`
+- **`/continue` 安全门**: 新增 `has_pending_spec_review()` 检查，阻止用户通过 `/continue` 绕过 CRITICAL 审查阻断，引导使用 `/fix`
 - **`/resume` 安全门**: 同上，防止 `/resume` 跳过未解决的 CRITICAL 问题直接从 Step 2 继续
-- **Codex 不可用 fallback**: `/fix-spec` 无 codex 时改用 Claude 执行审查并覆写 `spec-review.md`，避免读取旧审查结果导致无限循环
-- **并发保护**: `/fix-spec` 入口立即将 `awaiting-spec-review.json` 状态标记为 `fixing`，第二个并发请求被拒绝
+- **Codex 不可用 fallback**: `/fix` 无 codex 时改用 Claude 执行审查并覆写 `spec-review.md`，避免读取旧审查结果导致无限循环
+- **并发保护**: `/fix` 入口立即将 `awaiting-spec-review.json` 状态标记为 `fixing`，第二个并发请求被拒绝
 - **`detect_feature_name` 增强**: 扫描文件列表新增 `awaiting-spec-review.json`，确保 spec 审查阻断的 feature 能被正确识别
-- **`/pause` 提示优化**: 对已处于 spec 审查阻断的 feature，提示使用 `/fix-spec` 而非 `/restart`
+- **`/pause` 提示优化**: 对已处于 spec 审查阻断的 feature，提示使用 `/fix` 而非 `/continue`
 
 **用户体验变化**：
 ```
-旧流程: CRITICAL >= 3 → 飞书通知 → 用户手动改 specs 三文档 → /pause → /restart
-新流程: CRITICAL >= 3 → 飞书发问题摘要 → 用户回复修改方向 → /fix-spec 自动修复 + 重新审查
+旧流程: CRITICAL >= 3 → 飞书通知 → 用户手动改 specs 三文档 → /pause → /continue
+新流程: CRITICAL >= 3 → 飞书发问题摘要 → 用户回复修改方向 → /fix 自动修复 + 重新审查
 ```
 
 ## Recent Improvements (2026-03-31)
@@ -401,7 +428,7 @@ SCORE < 8 → 人工确认节点（agent_notify 发飞书附截图）
 - **fallback 报告改为 FAIL**: 审查工具执行失败时 `FINAL_VERDICT` 改为 `FAIL`（原为 PASS），避免静默通过
 - **三字段联合判断**: 同时读取 `ROUND_1_STATUS` + `ROUND_2_STATUS` + `FINAL_VERDICT`，三者都 PASS 才算通过
 
-### `/restart` 断点逻辑优化
+### `/continue` 断点逻辑优化
 - **断点 ≥ Step 3 跳过 spec diff**: 断点在执行态（Step 3+）时直接从对应 Step 继续，不再回到 requirements diff 阶段
 - **requirements diff 过滤元信息噪音**: 忽略 `状态/更新时间/审查状态` 等元信息行，只比较实质需求变更
 
@@ -428,7 +455,7 @@ SCORE < 8 → 人工确认节点（agent_notify 发飞书附截图）
 
 ### 工作流控制命令扩展
 - **`/pause` 命令**: 主动暂停工作流，保存断点和 requirements.md 快照
-- **`/restart` 命令**: 从 `/pause` 恢复，自动 diff requirements.md，有变更则 Stage 1a'（润色）+ Stage 1b'（最小粒度更新 design/tasks），无变更则直接从断点继续
+- **`/continue` 命令**（别名 `/restart`）: 从 `/pause` 继续，自动 diff requirements.md，有变更则 Stage 1a'（润色）+ Stage 1b'（最小粒度更新 design/tasks），无变更则直接从断点继续
 - **`/resume` 命令**: 从崩溃/意外中断恢复，读取 `workflow-log` 判断最后完成的 Step，从下一步继续，不重头跑
 - **openclaw 主动通知**: `feishu_notify()` 优先使用 `openclaw message send` 主动私信，配置 `FEISHU_NOTIFY_TARGET` 即可；fallback 到 webhook
 - **Agent 主动对话**: 关键节点（开放问题/审查阻断/测试失败/流水线崩溃）通过 `agent_notify()` 触发 openclaw Agent 主动在飞书发起对话，等待用户决策后继续

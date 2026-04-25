@@ -24,7 +24,7 @@ model: sonnet
 |------|---------|
 | `/resume` | 进程崩溃/中断，从断点继续 |
 | `/answer` | 因 `[UNCERTAIN]` 主动暂停，提供澄清后继续 |
-| `/start-workflow` | 全新需求，从头开始 |
+| `/start` | 全新需求，从头开始 |
 
 ## 用法
 

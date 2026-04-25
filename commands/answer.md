@@ -1,3 +1,10 @@
+---
+description: 答复 Step 1 开放问题（[UNCERTAIN]），恢复暂停的工作流
+argument-hint: <需求名称> <你的答复>
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash
+model: sonnet
+---
+
 # /answer — 答复 Step 1 开放问题，恢复暂停的工作流
 
 ## 触发条件

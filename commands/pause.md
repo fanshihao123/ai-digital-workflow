@@ -10,7 +10,7 @@ model: sonnet
 ## 作用
 
 主动暂停正在运行的工作流，保存当前断点位置和 requirements.md 快照。
-暂停后可以修改需求，然后用 `/restart` 恢复。
+暂停后可以修改需求，然后用 `/continue` 恢复。
 
 ## 适用场景
 
@@ -22,7 +22,7 @@ model: sonnet
 | 命令 | 适用情况 |
 |------|---------|
 | `/pause` | 主动暂停，准备修改需求或稍后继续 |
-| `/restart` | 从 `/pause` 状态恢复，自动检测需求是否有变更 |
+| `/continue` | 从 `/pause` 状态继续，自动检测需求是否有变更 |
 | `/resume` | 从崩溃/意外中断恢复，不涉及需求变更 |
 
 ## 用法
@@ -36,8 +36,8 @@ model: sonnet
 ```
 
 暂停后：
-- 如需改需求：编辑 `$WORKFLOW_DATA_DIR/{feature}/requirements.md`，然后 `/restart {feature}`
-- 不改需求：直接 `/restart {feature}`
+- 如需改需求：编辑 `$WORKFLOW_DATA_DIR/{feature}/requirements.md`，然后 `/continue {feature}`
+- 不改需求：直接 `/continue {feature}`
 
 ---
 

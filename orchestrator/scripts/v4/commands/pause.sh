@@ -30,9 +30,9 @@ cmd_pause() {
     already_at=$(get_paused_field "$feature_name" "paused_at")
     echo "⚠️ '$feature_name' 已处于暂停状态（暂停于 $already_at）"
     if has_pending_spec_review "$feature_name"; then
-      echo "   当前因 Spec 审查严重问题阻断，请用: /fix-spec $feature_name {修改指导}"
+      echo "   当前因 Spec 审查严重问题阻断，请用: /fix $feature_name {修改指导}"
     else
-      echo "   修改需求后执行: /restart $feature_name"
+      echo "   修改需求后执行: /continue $feature_name"
     fi
     return 0
   fi
@@ -72,6 +72,6 @@ cmd_pause() {
   log "PIPELINE_PAUSED_BY_USER: $feature_name at step $paused_step" "$pipeline_log"
   notify "⏸️ 工作流已手动暂停 (断点 Step $paused_step): $feature_name"
   echo "⏸️ 已暂停 '$feature_name'（断点 Step $paused_step）"
-  echo "   - 如需改需求: 编辑 $WORKFLOW_DATA_DIR/$feature_name/requirements.md，然后 /restart $feature_name"
-  echo "   - 不改需求:  直接 /restart $feature_name"
+  echo "   - 如需改需求: 编辑 $WORKFLOW_DATA_DIR/$feature_name/requirements.md，然后 /continue $feature_name"
+  echo "   - 不改需求:  直接 /continue $feature_name"
 }

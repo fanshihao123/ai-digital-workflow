@@ -1,28 +1,28 @@
 ---
-description: 从 /pause 状态恢复，自动检测需求变更并最小粒度更新
+description: 从 /pause 状态继续，自动检测需求变更并最小粒度更新（别名: /restart）
 argument-hint: [需求名称]（可选，不填自动检测）
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash
 model: sonnet
 ---
 
-# /restart
+# /continue
 
 ## 作用
 
-从 `/pause` 暂停状态恢复工作流。自动 diff requirements.md 与快照，
+从 `/pause` 暂停状态继续工作流。自动 diff requirements.md 与快照，
 有变更则最小粒度更新 design.md + tasks.md，无变更则直接从断点继续。
 
 ## 流程
 
 ```
-/restart
+/continue
     ↓
 对比 requirements.md vs 快照
     ↓
 有变更？
   ├── 是 → Stage 1a': 模型润色规范化 requirements.md
   │              ↓
-  │         检测 [UNCERTAIN] → 有则暂停询问（/answer 后再 /restart）
+  │         检测 [UNCERTAIN] → 有则暂停询问（/answer 后再 /continue）
   │              ↓
   │         Stage 1b': 最小粒度更新 design.md + tasks.md（diff 驱动）
   │              ↓
@@ -42,21 +42,21 @@ Stage 1b' 只修改受 diff 影响的部分：
 
 ```
 # 自动检测
-/restart
+/continue
 
 # 指定需求名称
-/restart user-registration
+/continue user-registration
 ```
 
 ## 注意
 
-- 必须先执行 `/pause` 才能 `/restart`
-- 若处于 `/answer` 等待澄清状态，需先回复 `/answer` 再 `/restart`
+- 必须先执行 `/pause` 才能 `/continue`
+- 若处于 `/answer` 等待澄清状态，需先回复 `/answer` 再 `/continue`
 
 ---
 
 不要手工模拟 workflow，必须把本命令**真实转发**到项目编排器脚本：
 
-!`bash .claude/orchestrator/scripts/feishu-handler.sh "/restart $ARGUMENTS"`
+!`bash .claude/orchestrator/scripts/feishu-handler.sh "/continue $ARGUMENTS"`
 
 执行后说明：需求是否有变更、从哪个 Step 继续、跳过了哪些步骤。
